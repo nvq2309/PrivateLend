@@ -127,6 +127,10 @@ pub fn deposit(
         if let Some(bump) = ctx.bumps.get("user_receipt") {
             user_receipt.bump = *bump;
         }
+        // Initialize protection fields
+        user_receipt.protection_tier = 0;
+        user_receipt.protection_expiry = 0;
+        user_receipt.last_update_timestamp = Clock::get()?.unix_timestamp;
     }
     user_receipt.owner = ctx.accounts.user.key();
     user_receipt.vault = vault.key();

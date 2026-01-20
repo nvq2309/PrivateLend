@@ -1,11 +1,19 @@
 [package]
 name = "veillend"
 version = "0.1.0"
+description = "VeilLend - Privacy-preserving lending protocol with liquidation protection"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
 name = "veillend"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
 
 [dependencies]
 anchor-lang = "0.29.0"
