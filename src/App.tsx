@@ -61,6 +61,11 @@ const App = () => {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState('');
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [successNote, setSuccessNote] = useState<NoteRecord | null>(null);
+  const [successProof, setSuccessProof] = useState<ProofArtifact | null>(null);
+  const [seedBusy, setSeedBusy] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const [proof, setProof] = useState<ProofArtifact | null>(null);
   const [pendingNote, setPendingNote] = useState<NoteRecord | null>(null);
   const [noteSaved, setNoteSaved] = useState(false);
@@ -77,6 +82,8 @@ const App = () => {
     walletBalanceLamports,
     collateralBalanceLamports,
     borrowBalanceLamports,
+    usdcBalanceLamports,
+    usdcVaultCollateralLamports,
     collateralDecimals,
     borrowDecimals,
     collateralMint,
@@ -154,6 +161,9 @@ const App = () => {
     setProof(null);
     setPendingNote(null);
     setNoteSaved(false);
+    setActionSuccess(null);
+    setSuccessNote(null);
+    setSuccessProof(null);
   };
 
   const closeAction = () => {
@@ -185,6 +195,11 @@ const App = () => {
     setProof(null);
     setPendingNote(null);
     setNoteSaved(false);
+    setActionSuccess(null);
+    setSuccessNote(null);
+    setSuccessProof(null);
+    const actionLabel = activeAction.toLowerCase();
+    let nextNote: NoteRecord | null = null;
 
     try {
       let signature = '';
@@ -213,10 +228,13 @@ const App = () => {
           noteHash: baseNote.noteHash,
           lastTxnId: baseNote.lastTxnId,
         });
-        const nextNote = await rotateNoteRecord(publicKey.toBase58(), signature, baseNote);
-        setProof(proofArtifact);
-        setPendingNote(nextNote);
+        nextNote = await rotateNoteRecord(publicKey.toBase58(), signature, baseNote);
+        setSuccessNote(nextNote);
+        setSuccessProof(proofArtifact);
       }
+
+      closeAction();
+      showActionSuccess(`${actionLabel} completed successfully.`, mode === 'SECURE' && Boolean(nextNote));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Transaction failed.';
       setActionError(message);
@@ -232,6 +250,28 @@ const App = () => {
     refreshNote();
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 3000);
+  };
+
+  const showActionSuccess = (message: string, keepOpen = false) => {
+    setActionSuccess(message);
+    if (!keepOpen) {
+      window.setTimeout(() => setActionSuccess(null), 4000);
+    }
+  };
+
+  const dismissActionSuccess = () => {
+    setActionSuccess(null);
+    setSuccessNote(null);
+    setSuccessProof(null);
+  };
+
+  const handleSaveSuccessNote = () => {
+    if (!successNote) return;
+    saveNoteRecord(successNote);
+    refreshNote();
+    setNoteSaved(true);
+    window.setTimeout(() => setNoteSaved(false), 3000);
+    dismissActionSuccess();
   };
 
   const showPageError = (message: string) => {
@@ -291,11 +331,36 @@ const App = () => {
     }
   };
 
+  const handleSeedVault = async () => {
+    if (!publicKey) {
+      showPageError('Connect wallet to seed the vault.');
+      return;
+    }
+    if (!vaultStats) {
+      showPageError('Vault is not initialized yet.');
+      return;
+    }
+    setSeedBusy(true);
+    setSeedError(null);
+    try {
+      await fastAdapter.supply(seedAmountLamports);
+      showActionSuccess(`Seeded vault with 1,000 ${collateralSymbol}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Vault seed failed.';
+      setSeedError(message);
+    } finally {
+      setSeedBusy(false);
+    }
+  };
+
   const vaultCollateral = vaultStats?.totalCollateral ?? 0;
   const vaultBorrowed = vaultStats?.totalBorrowed ?? 0;
   const healthFactor = myPosition?.healthFactor ?? 0;
   const collateralPrice = MARKET_BASE[collateralSymbol as keyof typeof MARKET_BASE]?.price ?? 0;
   const tvlUsd = toUiAmount(vaultCollateral, collateralDecimals) * collateralPrice;
+  const seedAmountLamports = Math.floor(1000 * Math.pow(10, collateralDecimals));
+  const seedReady = collateralBalanceLamports >= seedAmountLamports;
+  const showSeedVault = Boolean(vaultStats) && vaultCollateral === 0 && collateralSymbol === 'USDC';
 
   return (
     <Layout activeView={view} onViewChange={setView} clusterLabel={cluster.toUpperCase()}>
@@ -310,9 +375,36 @@ const App = () => {
             <p className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-1">
               Vault Collateral
             </p>
-            <p className="text-2xl font-bold">
-              {formatAmount(vaultCollateral, collateralDecimals)} {collateralSymbol}
-            </p>
+            <div className="space-y-1">
+              <p className="text-2xl font-bold">
+                {formatAmount(vaultCollateral, collateralDecimals)} {collateralSymbol}
+              </p>
+              {collateralSymbol !== 'USDC' && (
+                <p className="text-sm text-slate-400">
+                  {formatAmount(usdcVaultCollateralLamports, 6)} USDC
+                </p>
+              )}
+            </div>
+            {showSeedVault && (
+              <div className="mt-4 space-y-2">
+                <button
+                  type="button"
+                  onClick={handleSeedVault}
+                  disabled={!seedReady || seedBusy}
+                  className="w-full rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-200 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {seedBusy ? 'Seeding vault...' : `Seed 1,000 ${collateralSymbol}`}
+                </button>
+                {!seedReady && (
+                  <p className="text-[10px] text-slate-400">
+                    Mint at least 1,000 {collateralSymbol} to your wallet to seed the vault.
+                  </p>
+                )}
+                {seedError && (
+                  <p className="text-[10px] text-red-300">{seedError}</p>
+                )}
+              </div>
+            )}
           </div>
           <div className="glass p-6 rounded-3xl border-white/10">
             <p className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-1">
@@ -580,24 +672,50 @@ const App = () => {
           <div className="space-y-6">
             <section className="glass rounded-3xl p-6 border-white/10">
               <RiskIndicator health={healthFactor} label="Personal Health" />
-              <div className="mt-4 pt-4 border-t border-white/5 space-y-3">
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-300">Wallet SOL</span>
-                  <span className="font-bold">
-                    {formatAmount(walletBalanceLamports, 9)} SOL
-                  </span>
+              
+              <div className="mt-4 pt-4 border-t border-white/5">
+                <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
+                  Wallet Balances
+                </p>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                      SOL
+                    </span>
+                    <span className="font-bold font-mono">
+                      {formatAmount(walletBalanceLamports, 9, 4)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      USDC
+                    </span>
+                    <span className="font-bold font-mono">
+                      {formatAmount(usdcBalanceLamports, 6, 2)}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-300">Collateral ATA</span>
-                  <span className="font-bold">
-                    {formatAmount(collateralBalanceLamports, collateralDecimals)} {collateralSymbol}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-300">Borrow ATA</span>
-                  <span className="font-bold">
-                    {formatAmount(borrowBalanceLamports, borrowDecimals)} {borrowSymbol}
-                  </span>
+              </div>
+
+              <div className="mt-4 pt-4 border-t border-white/5">
+                <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
+                  Your Position
+                </p>
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300">Deposited</span>
+                    <span className="font-bold font-mono text-emerald-300">
+                      {formatAmount(myPosition?.deposit ?? 0, collateralDecimals, 4)} {collateralSymbol}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300">Borrowed</span>
+                    <span className="font-bold font-mono text-red-300">
+                      {formatAmount(myPosition?.borrow ?? 0, borrowDecimals, 2)} {borrowSymbol}
+                    </span>
+                  </div>
                 </div>
               </div>
             </section>
@@ -670,8 +788,53 @@ const App = () => {
         />
       )}
 
+      {actionSuccess && (
+        <div className="fixed bottom-6 right-6 w-80 max-w-[90vw] bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 px-4 py-3 rounded-2xl text-xs space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <p className="font-semibold">{actionSuccess}</p>
+            <button
+              type="button"
+              onClick={dismissActionSuccess}
+              className="text-emerald-200/70 hover:text-emerald-100"
+            >
+              <span className="sr-only">Dismiss</span>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {successNote && successProof && (
+            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 space-y-2">
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-emerald-100/80 font-bold mb-1">
+                  Proof hash
+                </p>
+                <p className="font-mono break-all text-emerald-100">
+                  {successProof.proofHash}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-emerald-100/80 font-bold mb-1">
+                  New note
+                </p>
+                <p className="font-mono break-all text-emerald-100">
+                  {successNote.noteHash}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveSuccessNote}
+                className="w-full rounded-lg border border-emerald-300/40 bg-emerald-500/30 px-3 py-2 text-[11px] font-bold text-emerald-50 hover:bg-emerald-500/40"
+              >
+                Save to storage
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {noteSaved && (
-        <div className="fixed bottom-6 right-6 bg-emerald-500/20 border border-emerald-400/40 text-emerald-100 px-4 py-2 rounded-full text-xs">
+        <div className="fixed bottom-20 right-6 bg-emerald-500/10 border border-emerald-400/30 text-emerald-100 px-4 py-2 rounded-full text-xs">
           Note saved to storage.
         </div>
       )}

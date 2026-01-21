@@ -21,7 +21,6 @@ import {
   createSyncNativeInstruction,
   getAccount,
   getAssociatedTokenAddressSync,
-  getOrCreateAssociatedTokenAccount,
   mintTo,
 } from '@solana/spl-token';
 
@@ -273,44 +272,165 @@ const run = async () => {
     6,
   );
 
-  const vaultUsdcAta = await getOrCreateAssociatedTokenAccount(
-    connection,
-    deployer,
-    usdcMint,
-    vault,
-    true,
+  const [usdcVault] = PublicKey.findProgramAddressSync(
+    [Buffer.from('vault'), usdcMint.toBuffer()],
+    programId,
   );
-  const usdcAmount = 1_000_000n * 1_000_000n;
+  const [usdcVaultCollateralAccount] = PublicKey.findProgramAddressSync(
+    [Buffer.from('vault_collateral'), usdcVault.toBuffer()],
+    programId,
+  );
+  const [usdcProtectionPool] = PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_pool'), usdcVault.toBuffer()],
+    programId,
+  );
+  const [usdcProtectionReserveAccount] = PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_reserve'), usdcVault.toBuffer()],
+    programId,
+  );
+  const [usdcReceiptMint] = PublicKey.findProgramAddressSync(
+    [Buffer.from('receipt'), usdcVault.toBuffer()],
+    programId,
+  );
+  const [usdcBorrowMint] = PublicKey.findProgramAddressSync(
+    [Buffer.from('borrow'), usdcVault.toBuffer()],
+    programId,
+  );
+  const [usdcUserReceipt] = PublicKey.findProgramAddressSync(
+    [Buffer.from('user_receipt'), usdcVault.toBuffer(), deployer.publicKey.toBuffer()],
+    programId,
+  );
 
+  await maybeInitialize('usdc-vault', async () => {
+    await program.methods
+      .initialize(new BN(8000), new BN(9000))
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault: usdcVault,
+        vaultCollateralAccount: usdcVaultCollateralAccount,
+        collateralMint: usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  await maybeInitialize('usdc-mints', async () => {
+    await program.methods
+      .initializeMints()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault: usdcVault,
+        receiptMint: usdcReceiptMint,
+        borrowMint: usdcBorrowMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  await maybeInitialize('usdc-protection', async () => {
+    await program.methods
+      .initializeProtection()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault: usdcVault,
+        protectionPool: usdcProtectionPool,
+        protectionReserveAccount: usdcProtectionReserveAccount,
+        collateralMint: usdcMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  const deployerUsdcAta = getAssociatedTokenAddressSync(
+    usdcMint,
+    deployer.publicKey,
+  );
+  const usdcAtaInfo = await connection.getAccountInfo(deployerUsdcAta);
+  if (!usdcAtaInfo) {
+    const createAtaTx = new anchor.web3.Transaction().add(
+      createAssociatedTokenAccountInstruction(
+        deployer.publicKey,
+        deployerUsdcAta,
+        deployer.publicKey,
+        usdcMint,
+      ),
+    );
+    await provider.sendAndConfirm(createAtaTx, [deployer]);
+  }
+
+  const usdcDepositAmount = 10_000n * 1_000_000n;
   await mintTo(
     connection,
     deployer,
     usdcMint,
-    vaultUsdcAta.address,
+    deployerUsdcAta,
     deployer.publicKey,
-    usdcAmount,
+    usdcDepositAmount,
   );
 
-  const vaultCollateralBalance = await getAccount(connection, vaultCollateralAccount);
-  const vaultUsdcBalance = await getAccount(connection, vaultUsdcAta.address);
+  const usdcUserReceiptTokenAccount = getAssociatedTokenAddressSync(
+    usdcReceiptMint,
+    deployer.publicKey,
+  );
 
-  if (Number(vaultCollateralBalance.amount) !== depositAmount) {
+  const usdcDepositSignature = await program.methods
+    .deposit(new BN(Number(usdcDepositAmount)), encryptedBalance, clientPubkey)
+    .accountsStrict({
+      user: deployer.publicKey,
+      vault: usdcVault,
+      userReceipt: usdcUserReceipt,
+      receiptMint: usdcReceiptMint,
+      userReceiptTokenAccount: usdcUserReceiptTokenAccount,
+      userCollateralAccount: deployerUsdcAta,
+      vaultCollateralAccount: usdcVaultCollateralAccount,
+      collateralMint: usdcMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    })
+    .rpc();
+
+  console.log(`[deposit] 10,000 USDC into USDC vault: ${usdcDepositSignature}`);
+
+  const vaultCollateralBalance = await getAccount(connection, vaultCollateralAccount);
+  const usdcVaultBalance = await getAccount(connection, usdcVaultCollateralAccount);
+
+  if (Number(vaultCollateralBalance.amount) < depositAmount) {
     throw new Error(
-      `Vault collateral mismatch: expected ${depositAmount}, got ${vaultCollateralBalance.amount}`,
+      `Vault collateral too low: expected at least ${depositAmount}, got ${vaultCollateralBalance.amount}`,
     );
   }
-  if (Number(vaultUsdcBalance.amount) !== Number(usdcAmount)) {
+  if (Number(usdcVaultBalance.amount) < Number(usdcDepositAmount)) {
     throw new Error(
-      `Vault USDC mismatch: expected ${usdcAmount}, got ${vaultUsdcBalance.amount}`,
+      `USDC Vault too low: expected at least ${usdcDepositAmount}, got ${usdcVaultBalance.amount}`,
     );
   }
 
   console.log('[verify] Vault balances OK');
-  console.log(`- Vault: ${vault.toBase58()}`);
-  console.log(`- Collateral mint (wSOL demo): ${collateralMint.toBase58()}`);
-  console.log(`- Vault collateral amount: ${vaultCollateralBalance.amount} (4 SOL)`);
+  console.log(`- SOL Vault: ${vault.toBase58()}`);
+  console.log(`- Collateral mint (wSOL): ${collateralMint.toBase58()}`);
+  console.log(`- SOL Vault collateral: ${vaultCollateralBalance.amount} (4 SOL)`);
+  console.log(`- USDC Vault: ${usdcVault.toBase58()}`);
   console.log(`- USDC mint: ${usdcMint.toBase58()}`);
-  console.log(`- Vault USDC amount: ${vaultUsdcBalance.amount} (1,000,000 USDC)`);
+  console.log(`- USDC Vault collateral: ${usdcVaultBalance.amount} (10,000 USDC)`);
+
+  const envPath = path.resolve('.env');
+  let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
+  const usdcMintLine = `VITE_USDC_MINT=${usdcMint.toBase58()}`;
+  if (envContent.includes('VITE_USDC_MINT=')) {
+    envContent = envContent.replace(/VITE_USDC_MINT=.*/g, usdcMintLine);
+  } else {
+    envContent = envContent.trimEnd() + '\n' + usdcMintLine + '\n';
+  }
+  fs.writeFileSync(envPath, envContent);
+  console.log(`[env] Updated VITE_USDC_MINT in .env: ${usdcMint.toBase58()}`);
 };
 
 run().catch((error) => {

@@ -8,7 +8,7 @@ import {
   TransactionInstruction,
 } from '@solana/web3.js';
 import BN from 'bn.js';
-import borsh from '@coral-xyz/borsh';
+import * as borsh from '@coral-xyz/borsh';
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
@@ -23,6 +23,7 @@ import {
   DEFAULT_COLLATERAL_MINT,
   PROGRAM_ID_STRINGS,
   SOLANA_CLUSTER,
+  USDC_MINT,
   WSOL_MINT,
 } from '../config/solana';
 import {
@@ -281,9 +282,11 @@ export const useVeilLend = (mint?: PublicKey) => {
   const [walletBalanceLamports, setWalletBalanceLamports] = useState(0);
   const [collateralBalanceLamports, setCollateralBalanceLamports] = useState(0);
   const [borrowBalanceLamports, setBorrowBalanceLamports] = useState(0);
+  const [usdcBalanceLamports, setUsdcBalanceLamports] = useState(0);
   const [collateralDecimals, setCollateralDecimals] = useState(9);
   const [borrowDecimals, setBorrowDecimals] = useState(6);
   const [borrowMintAddress, setBorrowMintAddress] = useState<PublicKey | null>(null);
+  const [usdcVaultCollateralLamports, setUsdcVaultCollateralLamports] = useState(0);
   const [note, setNote] = useState<NoteRecord | null>(null);
 
   const refreshNote = useCallback(() => {
@@ -320,6 +323,21 @@ export const useVeilLend = (mint?: PublicKey) => {
         } else {
           setCollateralBalanceLamports(0);
           setCollateralDecimals(collateralMint.equals(WSOL_MINT) ? 9 : 6);
+        }
+
+        const usdcAta = getAssociatedTokenAddressSync(
+          USDC_MINT,
+          publicKey,
+          false,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+        );
+        const usdcAtaInfo = await connection.getAccountInfo(usdcAta);
+        if (usdcAtaInfo) {
+          const usdcBalance = await connection.getTokenAccountBalance(usdcAta);
+          setUsdcBalanceLamports(Number(usdcBalance.value.amount));
+        } else {
+          setUsdcBalanceLamports(0);
         }
       } else {
         setWalletBalanceLamports(0);
@@ -375,6 +393,17 @@ export const useVeilLend = (mint?: PublicKey) => {
         }
       }
 
+      if (programId) {
+        const usdcVaultAddress = deriveVaultPda(programId, USDC_MINT);
+        const usdcVaultInfo = await connection.getAccountInfo(usdcVaultAddress);
+        if (usdcVaultInfo) {
+          const usdcVaultAccount = decodeAccount(vaultLayout, usdcVaultInfo.data);
+          setUsdcVaultCollateralLamports(toNumber(usdcVaultAccount.total_collateral));
+        } else {
+          setUsdcVaultCollateralLamports(0);
+        }
+      }
+
       if (protectionPoolAddress) {
         const poolInfo = await connection.getAccountInfo(protectionPoolAddress);
         if (poolInfo) {
@@ -414,6 +443,8 @@ export const useVeilLend = (mint?: PublicKey) => {
       } else {
         setBorrowBalanceLamports(0);
       }
+    } catch (error) {
+      console.warn('Failed to refresh VeilLend state:', error);
     } finally {
       setIsLoading(false);
     }
@@ -885,6 +916,8 @@ export const useVeilLend = (mint?: PublicKey) => {
     walletBalanceLamports,
     collateralBalanceLamports,
     borrowBalanceLamports,
+    usdcBalanceLamports,
+    usdcVaultCollateralLamports,
     collateralDecimals,
     borrowDecimals,
     borrowMintAddress,

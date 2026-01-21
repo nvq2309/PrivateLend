@@ -24,7 +24,13 @@ export const PROGRAM_ID_STRINGS: Record<VeilLendCluster, string | null> = {
 };
 
 const envCollateralMint = normalizeEnv(import.meta.env.VITE_COLLATERAL_MINT);
+const envUsdcMint = normalizeEnv(import.meta.env.VITE_USDC_MINT);
 
 export const WSOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
+
+// Devnet USDC mint - fallback to a known devnet USDC if not provided
+export const USDC_MINT = new PublicKey(
+  envUsdcMint ?? '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+);
 
 export const DEFAULT_COLLATERAL_MINT = new PublicKey(envCollateralMint ?? WSOL_MINT.toBase58());
