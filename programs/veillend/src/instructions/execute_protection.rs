@@ -14,7 +14,7 @@ pub struct ExecuteProtection<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump = vault.bump,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
     
     /// CHECK: Validated by PDA seeds in user_receipt
     pub protected_user: AccountInfo<'info>,
@@ -25,33 +25,33 @@ pub struct ExecuteProtection<'info> {
         bump = user_receipt.bump,
         constraint = user_receipt.owner == protected_user.key() @ VeilLendError::Unauthorized,
     )]
-    pub user_receipt: Account<'info, UserReceipt>,
+    pub user_receipt: Box<Account<'info, UserReceipt>>,
     
     #[account(
         mut,
         seeds = [PROTECTION_POOL_SEED, vault.key().as_ref()],
         bump = protection_pool.bump,
     )]
-    pub protection_pool: Account<'info, ProtectionPool>,
+    pub protection_pool: Box<Account<'info, ProtectionPool>>,
     
     #[account(
         mut,
         seeds = [PROTECTION_RESERVE_SEED, vault.key().as_ref()],
         bump,
     )]
-    pub protection_reserve_account: Account<'info, TokenAccount>,
+    pub protection_reserve_account: Box<Account<'info, TokenAccount>>,
     
     #[account(
         mut,
         seeds = [VAULT_COLLATERAL_SEED, vault.key().as_ref()],
         bump,
     )]
-    pub vault_collateral_account: Account<'info, TokenAccount>,
+    pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
     
     /// CHECK: Pyth oracle for price feed (validated in production)
     pub price_oracle: AccountInfo<'info>,
     
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
 }
 

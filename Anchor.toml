@@ -3,17 +3,17 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-veillend = "VeilLend111111111111111111111111111111111111111"
+veillend = "EESy32LNihZW9iNTaGTuzCt1meWr5pjrDzt63fJEAE8t"
 
 [programs.devnet]
-veillend = "VeilLend111111111111111111111111111111111111111"
+veillend = "EESy32LNihZW9iNTaGTuzCt1meWr5pjrDzt63fJEAE8t"
 
 [registry]
 url = "https://anchor.projectserum.com"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.tests.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha -p ./tsconfig.tests.json -t 1000000 \"tests/**/*.ts\""

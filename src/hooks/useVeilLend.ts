@@ -1,18 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
-import { Program, AnchorProvider, BN, Idl } from '@coral-xyz/anchor';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import {
+  PublicKey,
+  SystemProgram,
+  SYSVAR_RENT_PUBKEY,
+  Transaction,
+  TransactionInstruction,
+} from '@solana/web3.js';
+import BN from 'bn.js';
+import borsh from '@coral-xyz/borsh';
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction,
+  createSyncNativeInstruction,
+  getAssociatedTokenAddressSync,
+} from '@solana/spl-token';
+import { Buffer } from 'buffer';
 
-const PROGRAM_ID = new PublicKey('VeilLend111111111111111111111111111111111111111');
-
-const VAULT_SEED = Buffer.from('vault');
-const USER_RECEIPT_SEED = Buffer.from('user_receipt');
-const PROTECTION_POOL_SEED = Buffer.from('protection_pool');
-const PROTECTION_RESERVE_SEED = Buffer.from('protection_reserve');
-const VAULT_COLLATERAL_SEED = Buffer.from('vault_collateral');
-const RECEIPT_MINT_SEED = Buffer.from('receipt'); // Added
-const BORROW_MINT_SEED = Buffer.from('borrow'); // Added
+import idlJson from '../idl/veillend.json';
+import {
+  DEFAULT_COLLATERAL_MINT,
+  PROGRAM_ID_STRINGS,
+  SOLANA_CLUSTER,
+  WSOL_MINT,
+} from '../config/solana';
+import {
+  NoteRecord,
+  clearNoteRecord,
+  createInitialNoteRecord,
+  loadNoteRecord,
+  rotateNoteRecord,
+  saveNoteRecord,
+} from '../sdk/notes';
+import { createFastAdapter } from '../sdk/adapter';
 
 export interface Position {
   deposit: number;
@@ -21,6 +42,7 @@ export interface Position {
   healthFactor: number;
   protectionTier: number;
   protectionExpiry: number;
+  lastUpdateTimestamp: number;
 }
 
 export interface VaultStats {
@@ -40,628 +62,849 @@ export interface ProtectionPoolStats {
   totalProtectionPaid: number;
 }
 
-const IDL: Idl = {
-  version: '0.1.0',
-  name: 'veillend',
-  instructions: [
-    {
-      name: 'initialize',
-      accounts: [
-        { name: 'authority', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'receiptMint', isMut: true, isSigner: false }, // Added
-        { name: 'borrowMint', isMut: true, isSigner: false }, // Added
-        { name: 'protectionPool', isMut: true, isSigner: false },
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'protectionReserveAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-        { name: 'systemProgram', isMut: false, isSigner: false },
-        { name: 'rent', isMut: false, isSigner: false },
-      ],
-      args: [
-        { name: 'ltvBps', type: 'u64' },
-        { name: 'liquidationThresholdBps', type: 'u64' },
-      ],
-    },
-    {
-      name: 'deposit',
-      accounts: [
-        { name: 'user', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'receiptMint', isMut: true, isSigner: false }, // Added
-        { name: 'userReceiptTokenAccount', isMut: true, isSigner: false }, // Added
-        { name: 'userCollateralAccount', isMut: true, isSigner: false }, // Renamed from userTokenAccount
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-        { name: 'associatedTokenProgram', isMut: false, isSigner: false }, // Added
-        { name: 'systemProgram', isMut: false, isSigner: false },
-        { name: 'rent', isMut: false, isSigner: false }, // Added
-      ],
-      args: [
-          { name: 'amount', type: 'u64' },
-          { name: 'encryptedBalance', type: { array: ['u8', 32] } }, // Added
-          { name: 'clientPubkey', type: { array: ['u8', 32] } }, // Added
-      ],
-    },
-    {
-      name: 'withdraw',
-      accounts: [
-        { name: 'user', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'receiptMint', isMut: true, isSigner: false }, // Added for burn? No, withdraw.rs in head checks shares
-        { name: 'userReceiptTokenAccount', isMut: true, isSigner: false }, // Added
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'userCollateralAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-        { name: 'associatedTokenProgram', isMut: false, isSigner: false },
-      ],
-      args: [
-          { name: 'sharesToBurn', type: 'u64' }, // changed name
-          { name: 'encryptedBalance', type: { array: ['u8', 32] } },
-      ], 
-    },
-    {
-      name: 'borrow',
-      accounts: [
-        { name: 'user', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'userCollateralAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-      ],
-      args: [
-          { name: 'amount', type: 'u64' },
-          { name: 'encryptedBalance', type: { array: ['u8', 32] } },
-      ],
-    },
-    {
-      name: 'repay',
-      accounts: [
-        { name: 'user', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'userCollateralAccount', isMut: true, isSigner: false },
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-      ],
-      args: [
-        { name: 'amount', type: 'u64' },
-        { name: 'encryptedBalance', type: { array: ['u8', 32] } },
-      ],
-    },
-    {
-      name: 'subscribeProtection',
-      accounts: [
-        { name: 'user', isMut: true, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'protectionPool', isMut: true, isSigner: false },
-        { name: 'userPaymentAccount', isMut: true, isSigner: false }, // Renamed to match instruction? Check subscribe_protection.rs
-        { name: 'protectionReserveAccount', isMut: true, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-        { name: 'systemProgram', isMut: false, isSigner: false },
-      ],
-      args: [
-        { name: 'tier', type: 'u8' },
-        { name: 'durationDays', type: 'u16' },
-      ],
-    },
-    {
-      name: 'executeProtection',
-      accounts: [
-        { name: 'caller', isMut: false, isSigner: true },
-        { name: 'vault', isMut: true, isSigner: false },
-        { name: 'protectedUser', isMut: false, isSigner: false },
-        { name: 'userReceipt', isMut: true, isSigner: false },
-        { name: 'protectionPool', isMut: true, isSigner: false },
-        { name: 'protectionReserveAccount', isMut: true, isSigner: false },
-        { name: 'vaultCollateralAccount', isMut: true, isSigner: false },
-        { name: 'priceOracle', isMut: false, isSigner: false },
-        { name: 'collateralMint', isMut: false, isSigner: false },
-        { name: 'tokenProgram', isMut: false, isSigner: false },
-      ],
-      args: [],
-    },
-  ],
-  accounts: [
-    {
-      name: 'Vault',
-      type: {
-        kind: 'struct',
-        fields: [
-          { name: 'authority', type: 'publicKey' },
-          { name: 'collateralMint', type: 'publicKey' },
-          { name: 'receiptMint', type: 'publicKey' }, // Added
-          { name: 'borrowMint', type: 'publicKey' }, // Added
-          { name: 'totalCollateral', type: 'u64' },
-          { name: 'totalBorrowed', type: 'u64' },
-          { name: 'totalShares', type: 'u64' },
-          { name: 'ltvBps', type: 'u64' },
-          { name: 'liquidationThresholdBps', type: 'u64' },
-          { name: 'isPaused', type: 'bool' },
-          { name: 'bump', type: 'u8' },
-        ],
-      },
-    },
-    {
-      name: 'UserReceipt',
-      type: {
-        kind: 'struct',
-        fields: [
-          { name: 'owner', type: 'publicKey' },
-          { name: 'vault', type: 'publicKey' },
-          { name: 'shares', type: 'u64' }, 
-          { name: 'depositedCollateral', type: 'u64' }, 
-          { name: 'borrowedAmount', type: 'u64' },
-          { name: 'encryptedBalance', type: { array: ['u8', 32] } }, // Added
-          { name: 'clientPubkey', type: { array: ['u8', 32] } }, // Added
-          { name: 'protectionTier', type: 'u8' },
-          { name: 'protectionExpiry', type: 'i64' },
-          { name: 'lastUpdateTimestamp', type: 'i64' },
-          { name: 'bump', type: 'u8' },
-        ],
-      },
-    },
-    // ... ProtectionPool remains same ...
-    {
-      name: 'ProtectionPool',
-      type: {
-        kind: 'struct',
-        fields: [
-          { name: 'vault', type: 'publicKey' },
-          { name: 'reserveBalance', type: 'u64' },
-          { name: 'totalCoverage', type: 'u64' },
-          { name: 'totalSubscribers', type: 'u64' },
-          { name: 'totalExecutions', type: 'u64' },
-          { name: 'totalPremiumCollected', type: 'u64' },
-          { name: 'totalProtectionPaid', type: 'u64' },
-          { name: 'bump', type: 'u8' },
-        ],
-      },
-    },
-  ],
-  errors: [],
+const IDL_INSTRUCTIONS = (idlJson as any).instructions ?? [];
+const getDiscriminator = (name: string) => {
+  const ix = IDL_INSTRUCTIONS.find((entry: any) => entry.name === name);
+  if (!ix || !Array.isArray(ix.discriminator) || ix.discriminator.length !== 8) {
+    throw new Error(`Missing discriminator for ${name}`);
+  }
+  return Buffer.from(ix.discriminator);
 };
 
-// ... Helper functions for PDA ...
-// I will not implement client-side encryption, just standard args.
+const depositLayout = borsh.struct([
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+  borsh.array(borsh.u8(), 32, 'client_pubkey'),
+]);
 
-export function useVeilLend(collateralMint?: PublicKey) {
+const withdrawLayout = borsh.struct([
+  borsh.u64('shares_to_burn'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const borrowLayout = borsh.struct([
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const repayLayout = borsh.struct([
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const subscribeLayout = borsh.struct([
+  borsh.u8('tier'),
+  borsh.u16('duration_days'),
+]);
+
+const encodeInstruction = (name: string, args?: Record<string, any>) => {
+  switch (name) {
+    case 'deposit': {
+      const data = Buffer.alloc(depositLayout.span);
+      depositLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data]);
+    }
+    case 'withdraw': {
+      const data = Buffer.alloc(withdrawLayout.span);
+      withdrawLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data]);
+    }
+    case 'borrow': {
+      const data = Buffer.alloc(borrowLayout.span);
+      borrowLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data]);
+    }
+    case 'repay': {
+      const data = Buffer.alloc(repayLayout.span);
+      repayLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data]);
+    }
+    case 'subscribe_protection': {
+      const data = Buffer.alloc(subscribeLayout.span);
+      subscribeLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data]);
+    }
+    case 'execute_protection':
+      return Buffer.from(getDiscriminator(name));
+    default:
+      throw new Error(`Unsupported instruction: ${name}`);
+  }
+};
+
+const vaultLayout = borsh.struct([
+  borsh.publicKey('authority'),
+  borsh.publicKey('collateral_mint'),
+  borsh.publicKey('receipt_mint'),
+  borsh.publicKey('borrow_mint'),
+  borsh.u64('total_collateral'),
+  borsh.u64('total_borrowed'),
+  borsh.u64('total_shares'),
+  borsh.u64('ltv_bps'),
+  borsh.u64('liquidation_threshold_bps'),
+  borsh.bool('is_paused'),
+  borsh.u8('bump'),
+  borsh.array(borsh.u8(), 16, 'reserved'),
+]);
+
+const userReceiptLayout = borsh.struct([
+  borsh.publicKey('owner'),
+  borsh.publicKey('vault'),
+  borsh.u64('shares'),
+  borsh.u64('deposited_collateral'),
+  borsh.u64('borrowed_amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+  borsh.array(borsh.u8(), 32, 'client_pubkey'),
+  borsh.u8('protection_tier'),
+  borsh.i64('protection_expiry'),
+  borsh.i64('last_update_timestamp'),
+  borsh.u8('bump'),
+  borsh.array(borsh.u8(), 32, 'reserved'),
+]);
+
+const protectionPoolLayout = borsh.struct([
+  borsh.publicKey('vault'),
+  borsh.u64('reserve_balance'),
+  borsh.u64('total_coverage'),
+  borsh.u64('total_subscribers'),
+  borsh.u64('total_executions'),
+  borsh.u64('total_premium_collected'),
+  borsh.u64('total_protection_paid'),
+  borsh.u8('bump'),
+  borsh.array(borsh.u8(), 16, 'reserve_padding'),
+]);
+
+const toNumber = (value: BN | number | bigint | null | undefined) => {
+  if (value === null || value === undefined) return 0;
+  if (BN.isBN(value)) return value.toNumber();
+  if (typeof value === 'bigint') return Number(value);
+  return value;
+};
+
+const randomBytes32 = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
+
+const deriveVaultPda = (programId: PublicKey, collateralMint: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('vault'), collateralMint.toBuffer()],
+    programId,
+  )[0];
+
+const deriveUserReceiptPda = (programId: PublicKey, vault: PublicKey, owner: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('user_receipt'), vault.toBuffer(), owner.toBuffer()],
+    programId,
+  )[0];
+
+const deriveVaultCollateralPda = (programId: PublicKey, vault: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('vault_collateral'), vault.toBuffer()],
+    programId,
+  )[0];
+
+const deriveProtectionPoolPda = (programId: PublicKey, vault: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_pool'), vault.toBuffer()],
+    programId,
+  )[0];
+
+const deriveProtectionReservePda = (programId: PublicKey, vault: PublicKey) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_reserve'), vault.toBuffer()],
+    programId,
+  )[0];
+
+const decodeAccount = (layout: any, data: Buffer) => {
+  if (data.length < 8 + layout.span) {
+    throw new Error('Account data too short');
+  }
+  return layout.decode(data.subarray(8));
+};
+
+export const useVeilLend = (mint?: PublicKey) => {
   const { connection } = useConnection();
   const wallet = useWallet();
-  const { publicKey, signTransaction, signAllTransactions } = wallet;
-  
-  const [program, setProgram] = useState<Program | null>(null);
+  const { publicKey } = wallet;
+
+  const collateralMint = mint ?? DEFAULT_COLLATERAL_MINT;
+  const programIdBase58 = PROGRAM_ID_STRINGS[SOLANA_CLUSTER];
+  const programId = useMemo(() => {
+    if (!programIdBase58) return null;
+    try {
+      return new PublicKey(programIdBase58);
+    } catch (error) {
+      console.error('Invalid program id', error);
+      return null;
+    }
+  }, [programIdBase58]);
+
+  const [programError, setProgramError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!programId) {
+      setProgramError('Program not deployed for this cluster');
+      return;
+    }
+    if (!Array.isArray(IDL_INSTRUCTIONS) || IDL_INSTRUCTIONS.length === 0) {
+      setProgramError('Local IDL missing or invalid');
+      return;
+    }
+    setProgramError(null);
+  }, [programId]);
+
+  const vaultAddress = useMemo(
+    () => (programId ? deriveVaultPda(programId, collateralMint) : null),
+    [collateralMint, programId],
+  );
+  const vaultCollateralAddress = useMemo(
+    () => (programId && vaultAddress ? deriveVaultCollateralPda(programId, vaultAddress) : null),
+    [programId, vaultAddress],
+  );
+  const protectionPoolAddress = useMemo(
+    () => (programId && vaultAddress ? deriveProtectionPoolPda(programId, vaultAddress) : null),
+    [programId, vaultAddress],
+  );
+  const protectionReserveAddress = useMemo(
+    () => (programId && vaultAddress ? deriveProtectionReservePda(programId, vaultAddress) : null),
+    [programId, vaultAddress],
+  );
+  const userReceiptAddress = useMemo(
+    () =>
+      programId && vaultAddress && publicKey
+        ? deriveUserReceiptPda(programId, vaultAddress, publicKey)
+        : null,
+    [programId, publicKey, vaultAddress],
+  );
+
+  const [isLoading, setIsLoading] = useState(false);
   const [myPosition, setMyPosition] = useState<Position | null>(null);
   const [vaultStats, setVaultStats] = useState<VaultStats | null>(null);
   const [protectionPoolStats, setProtectionPoolStats] = useState<ProtectionPoolStats | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [walletBalanceLamports, setWalletBalanceLamports] = useState(0);
+  const [collateralBalanceLamports, setCollateralBalanceLamports] = useState(0);
+  const [borrowBalanceLamports, setBorrowBalanceLamports] = useState(0);
+  const [collateralDecimals, setCollateralDecimals] = useState(9);
+  const [borrowDecimals, setBorrowDecimals] = useState(6);
+  const [borrowMintAddress, setBorrowMintAddress] = useState<PublicKey | null>(null);
+  const [note, setNote] = useState<NoteRecord | null>(null);
 
-  useEffect(() => {
-    if (!publicKey || !signTransaction || !signAllTransactions) {
-      setProgram(null);
+  const refreshNote = useCallback(() => {
+    if (!publicKey) {
+      setNote(null);
       return;
     }
-
-    const provider = new AnchorProvider(
-      connection,
-      { publicKey, signTransaction, signAllTransactions } as any,
-      { commitment: 'confirmed' }
-    );
-    
-    const prog = new Program(IDL, PROGRAM_ID, provider);
-    setProgram(prog);
-  }, [connection, publicKey, signTransaction, signAllTransactions]);
-
-  const getVaultPDA = useCallback((mint: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [VAULT_SEED, mint.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-  const getUserReceiptPDA = useCallback((vault: PublicKey, user: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [USER_RECEIPT_SEED, vault.toBuffer(), user.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-  const getProtectionPoolPDA = useCallback((vault: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [PROTECTION_POOL_SEED, vault.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-  const getProtectionReservePDA = useCallback((vault: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [PROTECTION_RESERVE_SEED, vault.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-  const getVaultCollateralPDA = useCallback((vault: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [VAULT_COLLATERAL_SEED, vault.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-   const getReceiptMintPDA = useCallback((vault: PublicKey) => {
-    return PublicKey.findProgramAddressSync(
-      [RECEIPT_MINT_SEED, vault.toBuffer()],
-      PROGRAM_ID
-    )[0];
-  }, []);
-
-  const loadMyPosition = useCallback(async () => {
-    if (!program || !publicKey || !collateralMint) return;
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      
-      const receiptAccount = await program.account.userReceipt.fetchNullable(userReceipt);
-      
-      if (receiptAccount) {
-        const deposit = (receiptAccount.depositedCollateral as BN).toNumber();
-        const borrow = (receiptAccount.borrowedAmount as BN).toNumber();
-        
-        let healthFactor = 0;
-        if (borrow > 0) {
-          healthFactor = (deposit * 7500) / borrow;
-        }
-        
-        setMyPosition({
-          deposit,
-          borrow,
-          shares: (receiptAccount.shares as BN).toNumber(),
-          healthFactor,
-          protectionTier: receiptAccount.protectionTier as number,
-          protectionExpiry: (receiptAccount.protectionExpiry as BN).toNumber(),
-        });
-      } else {
-        setMyPosition(null);
-      }
-    } catch (err: any) {
-      console.error('Failed to load position:', err);
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA]);
-
-  const loadVaultStats = useCallback(async () => {
-    if (!program || !collateralMint) return;
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const vaultAccount = await program.account.vault.fetchNullable(vault);
-      
-      if (vaultAccount) {
-        setVaultStats({
-          totalCollateral: (vaultAccount.totalCollateral as BN).toNumber(),
-          totalBorrowed: (vaultAccount.totalBorrowed as BN).toNumber(),
-          totalShares: (vaultAccount.totalShares as BN).toNumber(),
-          ltv: (vaultAccount.ltvBps as BN).toNumber() / 100,
-          liquidationThreshold: (vaultAccount.liquidationThresholdBps as BN).toNumber() / 100,
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to load vault stats:', err);
-    }
-  }, [program, collateralMint, getVaultPDA]);
-
-  const loadProtectionPoolStats = useCallback(async () => {
-    if (!program || !collateralMint) return;
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const protectionPool = getProtectionPoolPDA(vault);
-      const poolAccount = await program.account.protectionPool.fetchNullable(protectionPool);
-      
-      if (poolAccount) {
-        setProtectionPoolStats({
-          reserveBalance: (poolAccount.reserveBalance as BN).toNumber(),
-          totalCoverage: (poolAccount.totalCoverage as BN).toNumber(),
-          totalSubscribers: (poolAccount.totalSubscribers as BN).toNumber(),
-          totalExecutions: (poolAccount.totalExecutions as BN).toNumber(),
-          totalPremiumCollected: (poolAccount.totalPremiumCollected as BN).toNumber(),
-          totalProtectionPaid: (poolAccount.totalProtectionPaid as BN).toNumber(),
-        });
-      }
-    } catch (err: any) {
-      console.error('Failed to load protection pool stats:', err);
-    }
-  }, [program, collateralMint, getVaultPDA, getProtectionPoolPDA]);
-
-  const deposit = useCallback(async (amount: number) => {
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      const vaultCollateral = getVaultCollateralPDA(vault);
-      const userCollateralAccount = await getAssociatedTokenAddress(collateralMint, publicKey);
-      const receiptMint = getReceiptMintPDA(vault);
-      const userReceiptTokenAccount = await getAssociatedTokenAddress(receiptMint, publicKey);
-      
-      const dummyEncrypted = Array.from({length: 32}, () => 0);
-      const dummyClient = Array.from({length: 32}, () => 0);
-
-      const tx = await program.methods
-        .deposit(new BN(amount), dummyEncrypted, dummyClient)
-        .accounts({
-          user: publicKey,
-          vault,
-          userReceipt,
-          receiptMint,
-          userReceiptTokenAccount,
-          userCollateralAccount,
-          vaultCollateralAccount: vaultCollateral,
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-      
-      await loadMyPosition();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getVaultCollateralPDA, getReceiptMintPDA, loadMyPosition]);
-
-  const withdraw = useCallback(async (amount: number) => {
-     // Note: `withdraw` takes SHARES not amount of collateral in new version.
-     // But frontend usually asks user for amount of collateral.
-     // I will treat input `amount` as SHARES for simplicity or I would need to calculate shares.
-     // Given internal state, shares ~ collateral if index=1.
-     // I will duplicate logic: pass amount as shares.
-     
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      const vaultCollateral = getVaultCollateralPDA(vault);
-      const userCollateralAccount = await getAssociatedTokenAddress(collateralMint, publicKey);
-      const receiptMint = getReceiptMintPDA(vault);
-      const userReceiptTokenAccount = await getAssociatedTokenAddress(receiptMint, publicKey);
-
-      const dummyEncrypted = Array.from({length: 32}, () => 0);
-
-      const tx = await program.methods
-        .withdraw(new BN(amount), dummyEncrypted)
-        .accounts({
-          user: publicKey,
-          vault,
-          userReceipt,
-          // receiptMint not needed in HEAD withdraw? Check withdraw.rs
-          // HEAD `withdraw.rs` struct: user, vault, user_receipt, vault_collateral, user_collateral, collateral_mint, token_program, associated_token.
-          // Wait, where is `shares_minted` burned?
-          // HEAD `withdraw.rs` MIGHT use `user_receipt` internal accounting if it doesn't burn token?
-          // Let's assume standard HEAD behavior.
-          vaultCollateralAccount: vaultCollateral,
-          userCollateralAccount: userCollateralAccount, // Dest
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      
-      await loadMyPosition();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getVaultCollateralPDA, getReceiptMintPDA, loadMyPosition]);
-
-  const borrow = useCallback(async (amount: number) => {
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      const vaultCollateral = getVaultCollateralPDA(vault);
-      const userCollateralAccount = await getAssociatedTokenAddress(collateralMint, publicKey);
-      
-      const dummyEncrypted = Array.from({length: 32}, () => 0);
-
-      const tx = await program.methods
-        .borrow(new BN(amount), dummyEncrypted)
-        .accounts({
-          user: publicKey,
-          vault,
-          userReceipt,
-          vaultCollateralAccount: vaultCollateral,
-          userCollateralAccount: userCollateralAccount,
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      
-      await loadMyPosition();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getVaultCollateralPDA, loadMyPosition]);
-
-  const repay = useCallback(async (amount: number) => {
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      const vaultCollateral = getVaultCollateralPDA(vault);
-      const userCollateralAccount = await getAssociatedTokenAddress(collateralMint, publicKey);
-      
-      const dummyEncrypted = Array.from({length: 32}, () => 0);
-
-      const tx = await program.methods
-        .repay(new BN(amount), dummyEncrypted)
-        .accounts({
-          user: publicKey,
-          vault,
-          userReceipt,
-          userCollateralAccount,
-          vaultCollateralAccount: vaultCollateral,
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      
-      await loadMyPosition();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getVaultCollateralPDA, loadMyPosition]);
-
-  const subscribeProtection = useCallback(async (tier: number, durationDays: number) => {
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, publicKey);
-      const protectionPool = getProtectionPoolPDA(vault);
-      const protectionReserve = getProtectionReservePDA(vault);
-      const userPaymentAccount = await getAssociatedTokenAddress(collateralMint, publicKey);
-      
-      const tx = await program.methods
-        .subscribeProtection(tier, durationDays)
-        .accounts({
-          user: publicKey,
-          vault,
-          userReceipt,
-          protectionPool,
-          userPaymentAccount,
-          protectionReserveAccount: protectionReserve,
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .rpc();
-      
-      await loadMyPosition();
-      await loadProtectionPoolStats();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getProtectionPoolPDA, getProtectionReservePDA, loadMyPosition, loadProtectionPoolStats]);
-
-  const executeProtection = useCallback(async (protectedUser: PublicKey, priceOracle: PublicKey) => {
-    if (!program || !publicKey || !collateralMint) throw new Error('Not connected');
-    
-    setIsLoading(true);
-    setError(null);
-    
-    try {
-      const vault = getVaultPDA(collateralMint);
-      const userReceipt = getUserReceiptPDA(vault, protectedUser);
-      const protectionPool = getProtectionPoolPDA(vault);
-      const protectionReserve = getProtectionReservePDA(vault);
-      const vaultCollateral = getVaultCollateralPDA(vault);
-      
-      const tx = await program.methods
-        .executeProtection()
-        .accounts({
-          caller: publicKey,
-          vault,
-          protectedUser,
-          userReceipt,
-          protectionPool,
-          protectionReserveAccount: protectionReserve,
-          vaultCollateralAccount: vaultCollateral,
-          priceOracle,
-          collateralMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
-      
-      await loadProtectionPoolStats();
-      return tx;
-    } catch (err: any) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [program, publicKey, collateralMint, getVaultPDA, getUserReceiptPDA, getProtectionPoolPDA, getProtectionReservePDA, getVaultCollateralPDA, loadProtectionPoolStats]);
+    setNote(loadNoteRecord(publicKey.toBase58()));
+  }, [publicKey]);
 
   useEffect(() => {
-    if (program && publicKey && collateralMint) {
-      loadMyPosition();
-      loadVaultStats();
-      loadProtectionPoolStats();
+    refreshNote();
+  }, [refreshNote]);
+
+  const refresh = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      if (publicKey) {
+        const solBalance = await connection.getBalance(publicKey);
+        setWalletBalanceLamports(solBalance);
+
+        const ata = getAssociatedTokenAddressSync(
+          collateralMint,
+          publicKey,
+          false,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+        );
+        const ataInfo = await connection.getAccountInfo(ata);
+        if (ataInfo) {
+          const balance = await connection.getTokenAccountBalance(ata);
+          setCollateralBalanceLamports(Number(balance.value.amount));
+          setCollateralDecimals(balance.value.decimals ?? 9);
+        } else {
+          setCollateralBalanceLamports(0);
+          setCollateralDecimals(collateralMint.equals(WSOL_MINT) ? 9 : 6);
+        }
+      } else {
+        setWalletBalanceLamports(0);
+        setCollateralBalanceLamports(0);
+        setBorrowBalanceLamports(0);
+      }
+
+      if (!programId || !vaultAddress) {
+        setVaultStats(null);
+        setProtectionPoolStats(null);
+        setMyPosition(null);
+        return;
+      }
+
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        setVaultStats(null);
+        setMyPosition(null);
+      } else {
+        const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+        const liquidationThresholdBps = toNumber(vaultAccount.liquidation_threshold_bps);
+        setBorrowMintAddress(vaultAccount.borrow_mint as PublicKey);
+        setVaultStats({
+          totalCollateral: toNumber(vaultAccount.total_collateral),
+          totalBorrowed: toNumber(vaultAccount.total_borrowed),
+          totalShares: toNumber(vaultAccount.total_shares),
+          ltv: toNumber(vaultAccount.ltv_bps) / 100,
+          liquidationThreshold: liquidationThresholdBps / 100,
+        });
+
+        if (userReceiptAddress && publicKey) {
+          const receiptInfo = await connection.getAccountInfo(userReceiptAddress);
+          if (receiptInfo) {
+            const userReceipt = decodeAccount(userReceiptLayout, receiptInfo.data);
+            const deposit = toNumber(userReceipt.deposited_collateral);
+            const borrow = toNumber(userReceipt.borrowed_amount);
+            const healthFactor =
+              borrow > 0 ? Math.floor((deposit * liquidationThresholdBps) / borrow) : 0;
+            setMyPosition({
+              deposit,
+              borrow,
+              shares: toNumber(userReceipt.shares),
+              healthFactor,
+              protectionTier: userReceipt.protection_tier,
+              protectionExpiry: Number(userReceipt.protection_expiry),
+              lastUpdateTimestamp: Number(userReceipt.last_update_timestamp),
+            });
+          } else {
+            setMyPosition(null);
+          }
+        } else {
+          setMyPosition(null);
+        }
+      }
+
+      if (protectionPoolAddress) {
+        const poolInfo = await connection.getAccountInfo(protectionPoolAddress);
+        if (poolInfo) {
+          const pool = decodeAccount(protectionPoolLayout, poolInfo.data);
+          setProtectionPoolStats({
+            reserveBalance: toNumber(pool.reserve_balance),
+            totalCoverage: toNumber(pool.total_coverage),
+            totalSubscribers: toNumber(pool.total_subscribers),
+            totalExecutions: toNumber(pool.total_executions),
+            totalPremiumCollected: toNumber(pool.total_premium_collected),
+            totalProtectionPaid: toNumber(pool.total_protection_paid),
+          });
+        } else {
+          setProtectionPoolStats(null);
+        }
+      } else {
+        setProtectionPoolStats(null);
+      }
+
+      if (publicKey && borrowMintAddress) {
+        const borrowAta = getAssociatedTokenAddressSync(
+          borrowMintAddress,
+          publicKey,
+          false,
+          TOKEN_PROGRAM_ID,
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+        );
+        const borrowAtaInfo = await connection.getAccountInfo(borrowAta);
+        if (borrowAtaInfo) {
+          const balance = await connection.getTokenAccountBalance(borrowAta);
+          setBorrowBalanceLamports(Number(balance.value.amount));
+          setBorrowDecimals(balance.value.decimals ?? 6);
+        } else {
+          setBorrowBalanceLamports(0);
+          setBorrowDecimals(6);
+        }
+      } else {
+        setBorrowBalanceLamports(0);
+      }
+    } finally {
+      setIsLoading(false);
     }
-  }, [program, publicKey, collateralMint, loadMyPosition, loadVaultStats, loadProtectionPoolStats]);
+  }, [
+    borrowMintAddress,
+    collateralMint,
+    connection,
+    programId,
+    protectionPoolAddress,
+    publicKey,
+    userReceiptAddress,
+    vaultAddress,
+  ]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      refresh();
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
+
+  const createInitialNote = useCallback(async () => {
+    if (!publicKey) {
+      throw new Error('Wallet not connected');
+    }
+    const record = await createInitialNoteRecord(publicKey.toBase58());
+    saveNoteRecord(record);
+    setNote(record);
+    return record;
+  }, [publicKey]);
+
+  const rotateNote = useCallback(
+    async (lastTxnId: string) => {
+      if (!publicKey) {
+        throw new Error('Wallet not connected');
+      }
+      const record = await rotateNoteRecord(publicKey.toBase58(), lastTxnId, note ?? undefined);
+      saveNoteRecord(record);
+      setNote(record);
+      return record;
+    },
+    [note, publicKey],
+  );
+
+  const clearNote = useCallback(() => {
+    if (!publicKey) return;
+    clearNoteRecord(publicKey.toBase58());
+    setNote(null);
+  }, [publicKey]);
+
+  const buildAtaInstruction = useCallback(
+    async (mintAddress: PublicKey, owner: PublicKey) => {
+      const ata = getAssociatedTokenAddressSync(
+        mintAddress,
+        owner,
+        false,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+      const info = await connection.getAccountInfo(ata);
+      if (info) {
+        return { ata, instructions: [] };
+      }
+      const ix = createAssociatedTokenAccountInstruction(
+        owner,
+        ata,
+        owner,
+        mintAddress,
+        TOKEN_PROGRAM_ID,
+        ASSOCIATED_TOKEN_PROGRAM_ID,
+      );
+      return { ata, instructions: [ix] };
+    },
+    [connection],
+  );
+
+  const sendTransaction = useCallback(
+    async (instructions: TransactionInstruction[], preInstructions: TransactionInstruction[] = []) => {
+      if (!publicKey) {
+        throw new Error('Wallet not connected');
+      }
+      if (!wallet.sendTransaction) {
+        throw new Error('Wallet does not support transactions');
+      }
+      const tx = new Transaction().add(...preInstructions, ...instructions);
+      tx.feePayer = publicKey;
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      const signature = await wallet.sendTransaction(tx, connection);
+      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+      return signature;
+    },
+    [connection, publicKey, wallet],
+  );
+
+  const deposit = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const receiptMint = vaultAccount.receipt_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
+        collateral,
+        publicKey,
+      );
+      const { ata: userReceiptAta, instructions: receiptInstructions } = await buildAtaInstruction(
+        receiptMint,
+        publicKey,
+      );
+      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+      const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
+      const preInstructions = [...instructions, ...receiptInstructions];
+
+      if (collateral.equals(WSOL_MINT)) {
+        preInstructions.push(
+          SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: userCollateralAta,
+            lamports: amount,
+          }),
+        );
+        preInstructions.push(createSyncNativeInstruction(userCollateralAta));
+      }
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: receiptMint, isSigner: false, isWritable: true },
+          { pubkey: userReceiptAta, isSigner: false, isWritable: true },
+          { pubkey: userCollateralAta, isSigner: false, isWritable: true },
+          { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('deposit', {
+          amount: new BN(amount),
+          encrypted_balance: randomBytes32(),
+          client_pubkey: Array.from(publicKey.toBytes()),
+        }),
+      });
+
+      const signature = await sendTransaction([ix], preInstructions);
+      await refresh();
+      return signature;
+    },
+    [
+      buildAtaInstruction,
+      connection,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      userReceiptAddress,
+      vaultAddress,
+      vaultCollateralAddress,
+    ],
+  );
+
+  const withdraw = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      if (!vaultStats || vaultStats.totalShares === 0 || vaultStats.totalCollateral === 0) {
+        throw new Error('Vault has no liquidity');
+      }
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const receiptMint = vaultAccount.receipt_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const shareAmount = Math.floor((amount * vaultStats.totalShares) / vaultStats.totalCollateral);
+
+      const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
+        collateral,
+        publicKey,
+      );
+      const userReceiptAta = getAssociatedTokenAddressSync(receiptMint, publicKey);
+      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+      const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: receiptMint, isSigner: false, isWritable: true },
+          { pubkey: userReceiptAta, isSigner: false, isWritable: true },
+          { pubkey: userCollateralAta, isSigner: false, isWritable: true },
+          { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('withdraw', {
+          shares_to_burn: new BN(shareAmount),
+          encrypted_balance: randomBytes32(),
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return signature;
+    },
+    [
+      buildAtaInstruction,
+      connection,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      userReceiptAddress,
+      vaultAddress,
+      vaultCollateralAddress,
+      vaultStats,
+    ],
+  );
+
+  const borrow = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const borrowMint = vaultAccount.borrow_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const { ata: userBorrowAta, instructions } = await buildAtaInstruction(
+        borrowMint,
+        publicKey,
+      );
+      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: userBorrowAta, isSigner: false, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: borrowMint, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('borrow', {
+          amount: new BN(amount),
+          encrypted_balance: randomBytes32(),
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return signature;
+    },
+    [
+      buildAtaInstruction,
+      connection,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      userReceiptAddress,
+      vaultAddress,
+    ],
+  );
+
+  const repay = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      if (!vaultCollateralAddress) {
+        throw new Error('Vault collateral account not derived');
+      }
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const repayMint = vaultAccount.borrow_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const { ata: userRepayAta, instructions } = await buildAtaInstruction(
+        repayMint,
+        publicKey,
+      );
+      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: userRepayAta, isSigner: false, isWritable: true },
+          { pubkey: vaultCollateralAddress, isSigner: false, isWritable: true },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: repayMint, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('repay', {
+          amount: new BN(amount),
+          encrypted_balance: randomBytes32(),
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return signature;
+    },
+    [
+      buildAtaInstruction,
+      connection,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      userReceiptAddress,
+      vaultAddress,
+      vaultCollateralAddress,
+    ],
+  );
+
+  const subscribeProtection = useCallback(
+    async (tier: number, duration: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      if (!protectionPoolAddress || !protectionReserveAddress) {
+        throw new Error('Protection pool not initialized');
+      }
+
+      const { ata: userPaymentAta, instructions } = await buildAtaInstruction(
+        collateralMint,
+        publicKey,
+      );
+      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: protectionPoolAddress, isSigner: false, isWritable: true },
+          { pubkey: userPaymentAta, isSigner: false, isWritable: true },
+          { pubkey: protectionReserveAddress, isSigner: false, isWritable: true },
+          { pubkey: collateralMint, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('subscribe_protection', {
+          tier,
+          duration_days: duration,
+        }),
+      });
+
+      await sendTransaction([ix], instructions);
+      await refresh();
+    },
+    [
+      buildAtaInstruction,
+      collateralMint,
+      programId,
+      protectionPoolAddress,
+      protectionReserveAddress,
+      publicKey,
+      refresh,
+      sendTransaction,
+      userReceiptAddress,
+      vaultAddress,
+    ],
+  );
+
+  const executeProtection = useCallback(async () => {
+    if (!programId || !vaultAddress || !publicKey) {
+      throw new Error('Program not ready or wallet not connected');
+    }
+    if (!protectionPoolAddress || !protectionReserveAddress || !vaultCollateralAddress) {
+      throw new Error('Protection pool not initialized');
+    }
+    const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+
+    const ix = new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: publicKey, isSigner: true, isWritable: true },
+        { pubkey: vaultAddress, isSigner: false, isWritable: true },
+        { pubkey: publicKey, isSigner: false, isWritable: true },
+        { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+        { pubkey: protectionPoolAddress, isSigner: false, isWritable: true },
+        { pubkey: protectionReserveAddress, isSigner: false, isWritable: true },
+        { pubkey: vaultCollateralAddress, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: collateralMint, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data: encodeInstruction('execute_protection'),
+    });
+
+    await sendTransaction([ix]);
+    await refresh();
+  }, [
+    collateralMint,
+    programId,
+    protectionPoolAddress,
+    protectionReserveAddress,
+    publicKey,
+    refresh,
+    sendTransaction,
+    userReceiptAddress,
+    vaultAddress,
+    vaultCollateralAddress,
+  ]);
+
+  const borrowCapacityLamports = useMemo(() => {
+    if (!myPosition || !vaultStats) return 0;
+    const maxBorrow = Math.floor((myPosition.deposit * vaultStats.ltv) / 100);
+    return Math.max(0, maxBorrow - myPosition.borrow);
+  }, [myPosition, vaultStats]);
+
+  const fastAdapter = useMemo(
+    () =>
+      createFastAdapter({
+        deposit,
+        withdraw,
+        borrow,
+        repay,
+      }),
+    [borrow, deposit, repay, withdraw],
+  );
 
   return {
-    program,
+    program: null,
+    programId,
+    programError,
+    cluster: SOLANA_CLUSTER,
+    collateralMint,
+    vaultAddress,
+    userReceiptAddress,
+    walletBalanceLamports,
+    collateralBalanceLamports,
+    borrowBalanceLamports,
+    collateralDecimals,
+    borrowDecimals,
+    borrowMintAddress,
+    borrowCapacityLamports,
+    note,
     myPosition,
     vaultStats,
     protectionPoolStats,
-    isLoading,
-    error,
     deposit,
     withdraw,
     borrow,
     repay,
     subscribeProtection,
     executeProtection,
-    loadMyPosition,
-    loadVaultStats,
-    loadProtectionPoolStats,
+    createInitialNote,
+    rotateNote,
+    clearNote,
+    refreshNote,
+    fastAdapter,
+    isLoading,
+    refresh,
   };
-}
-
-export default useVeilLend;
+};

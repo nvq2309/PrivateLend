@@ -7,7 +7,7 @@ pub mod state;
 
 use instructions::*;
 
-declare_id!("VeilLend111111111111111111111111111111111111111");
+declare_id!("EESy32LNihZW9iNTaGTuzCt1meWr5pjrDzt63fJEAE8t");
 
 #[program]
 pub mod veillend {
@@ -20,6 +20,18 @@ pub mod veillend {
         liquidation_threshold_bps: u64,
     ) -> Result<()> {
         instructions::initialize::initialize(ctx, ltv_bps, liquidation_threshold_bps)
+    }
+
+    pub fn initialize_mints(
+        ctx: Context<InitializeMints>,
+    ) -> Result<()> {
+        instructions::initialize_mints::initialize_mints(ctx)
+    }
+
+    pub fn initialize_protection(
+        ctx: Context<InitializeProtection>,
+    ) -> Result<()> {
+        instructions::initialize_protection::initialize_protection(ctx)
     }
 
     // From main - with Arcium encryption

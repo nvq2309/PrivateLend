@@ -15,7 +15,7 @@ pub struct Borrow<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump = vault.bump,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(
         mut,
@@ -23,10 +23,10 @@ pub struct Borrow<'info> {
         bump = user_receipt.bump,
         constraint = user_receipt.owner == user.key(),
     )]
-    pub user_receipt: Account<'info, UserReceipt>,
+    pub user_receipt: Box<Account<'info, UserReceipt>>,
 
     #[account(mut)]
-    pub user_borrow_account: Account<'info, TokenAccount>,
+    pub user_borrow_account: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: validated via Kamino program
     pub kamino_market: AccountInfo<'info>,
@@ -34,9 +34,9 @@ pub struct Borrow<'info> {
     /// CHECK: validated via Kamino program
     pub kamino_obligation: AccountInfo<'info>,
 
-    pub collateral_mint: Account<'info, anchor_spl::token::Mint>,
+    pub collateral_mint: Box<Account<'info, anchor_spl::token::Mint>>,
     #[account(constraint = borrow_mint.key() == vault.borrow_mint)]
-    pub borrow_mint: Account<'info, anchor_spl::token::Mint>,
+    pub borrow_mint: Box<Account<'info, anchor_spl::token::Mint>>,
     pub token_program: Program<'info, Token>,
 
     /// CHECK: Kamino lending program

@@ -1,0 +1,321 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import process from 'process';
+import anchorPkg from '@coral-xyz/anchor';
+
+const anchor = anchorPkg;
+const { BN } = anchorPkg;
+import {
+  Connection,
+  Keypair,
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+} from '@solana/web3.js';
+import {
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountInstruction,
+  createMint,
+  createSyncNativeInstruction,
+  getAccount,
+  getAssociatedTokenAddressSync,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+} from '@solana/spl-token';
+
+const CHAIN = process.env.CHAIN ?? 'localnet';
+const RPC_URL =
+  process.env.SOLANA_RPC_URL ??
+  (CHAIN === 'devnet' ? 'https://api.devnet.solana.com' : 'http://127.0.0.1:8899');
+
+const DEPLOYER_KEYPAIR =
+  process.env.DEPLOYER_KEYPAIR ?? process.env.ANCHOR_WALLET ?? '';
+const PUBLIC_WALLET_KEYPAIR = process.env.PUBLIC_WALLET_KEYPAIR ?? '';
+const PUBLIC_KEY = process.env.PUBLIC_KEY ?? '';
+
+const resolveKeypairPath = (input) =>
+  input.startsWith('~') ? path.join(os.homedir(), input.slice(1)) : input;
+
+const readKeypair = (keypairPath) => {
+  if (!keypairPath) {
+    throw new Error('Missing DEPLOYER_KEYPAIR (or ANCHOR_WALLET).');
+  }
+  const resolved = resolveKeypairPath(keypairPath);
+  const raw = fs.readFileSync(resolved, 'utf8');
+  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(raw)));
+};
+
+const loadIdl = () => {
+  const idlPath = path.resolve('target/idl/veillend.json');
+  const raw = fs.readFileSync(idlPath, 'utf8');
+  return JSON.parse(raw);
+};
+
+const getProgramId = (idl) => {
+  const envKey = CHAIN === 'devnet' ? 'VITE_PROGRAM_ID_DEVNET' : 'VITE_PROGRAM_ID_LOCALNET';
+  const fromEnv = process.env[envKey];
+  if (fromEnv) return new PublicKey(fromEnv);
+  if (idl?.address) return new PublicKey(idl.address);
+  throw new Error(`Missing program id: set ${envKey} in .env`);
+};
+
+const airdrop = async (connection, pubkey, sol) => {
+  const signature = await connection.requestAirdrop(pubkey, sol * LAMPORTS_PER_SOL);
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
+};
+
+const maybeAirdrop = async (connection, pubkey, sol, label) => {
+  try {
+    const signature = await airdrop(connection, pubkey, sol);
+    console.log(`[airdrop] ${label}: ${sol} SOL → ${pubkey.toBase58()} (${signature})`);
+  } catch (error) {
+    console.warn(`[airdrop] ${label} failed: ${String(error)}`);
+  }
+};
+
+const ensureProgramDeployed = async (connection, programId) => {
+  const info = await connection.getAccountInfo(programId);
+  if (!info) {
+    throw new Error(
+      `Program ${programId.toBase58()} not found. Run \`anchor deploy\` first.`,
+    );
+  }
+};
+
+const run = async () => {
+  const deployer = readKeypair(DEPLOYER_KEYPAIR);
+  const publicWallet = PUBLIC_WALLET_KEYPAIR ? readKeypair(PUBLIC_WALLET_KEYPAIR) : null;
+  const publicWalletPubkey = PUBLIC_KEY
+    ? new PublicKey(PUBLIC_KEY)
+    : publicWallet?.publicKey ?? deployer.publicKey;
+
+  const connection = new Connection(RPC_URL, 'confirmed');
+  const provider = new anchor.AnchorProvider(
+    connection,
+    new anchor.Wallet(deployer),
+    { commitment: 'confirmed' },
+  );
+  anchor.setProvider(provider);
+
+  const idl = loadIdl();
+  const programId = getProgramId(idl);
+  idl.address = programId.toBase58();
+  await ensureProgramDeployed(connection, programId);
+  const program = new anchor.Program(idl, provider);
+
+  console.log(`[bootstrap] chain=${CHAIN} rpc=${RPC_URL}`);
+  console.log(`[bootstrap] program=${programId.toBase58()}`);
+
+  await maybeAirdrop(connection, deployer.publicKey, 5, 'DEPLOYER');
+  await maybeAirdrop(connection, publicWalletPubkey, 2, 'PUBLIC_WALLET');
+
+  const collateralMintAddress =
+    process.env.VITE_COLLATERAL_MINT ?? 'So11111111111111111111111111111111111111112';
+  const collateralMint = new PublicKey(collateralMintAddress);
+
+  const [vault] = PublicKey.findProgramAddressSync(
+    [Buffer.from('vault'), collateralMint.toBuffer()],
+    programId,
+  );
+  const [vaultCollateralAccount] = PublicKey.findProgramAddressSync(
+    [Buffer.from('vault_collateral'), vault.toBuffer()],
+    programId,
+  );
+  const [protectionPool] = PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_pool'), vault.toBuffer()],
+    programId,
+  );
+  const [protectionReserveAccount] = PublicKey.findProgramAddressSync(
+    [Buffer.from('protection_reserve'), vault.toBuffer()],
+    programId,
+  );
+  const [receiptMint] = PublicKey.findProgramAddressSync(
+    [Buffer.from('receipt'), vault.toBuffer()],
+    programId,
+  );
+  const [borrowMint] = PublicKey.findProgramAddressSync(
+    [Buffer.from('borrow'), vault.toBuffer()],
+    programId,
+  );
+  const [userReceipt] = PublicKey.findProgramAddressSync(
+    [Buffer.from('user_receipt'), vault.toBuffer(), deployer.publicKey.toBuffer()],
+    programId,
+  );
+
+  const maybeInitialize = async (label, fn) => {
+    try {
+      await fn();
+      console.log(`[init] ${label}: ok`);
+    } catch (error) {
+      const message = String(error);
+      if (message.includes('already in use')) {
+        console.log(`[init] ${label}: already initialized`);
+        return;
+      }
+      throw error;
+    }
+  };
+
+  await maybeInitialize('vault', async () => {
+    await program.methods
+      .initialize(new BN(7500), new BN(8500))
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault,
+        vaultCollateralAccount,
+        collateralMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  await maybeInitialize('mints', async () => {
+    await program.methods
+      .initializeMints()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault,
+        receiptMint,
+        borrowMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  await maybeInitialize('protection', async () => {
+    await program.methods
+      .initializeProtection()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault,
+        protectionPool,
+        protectionReserveAccount,
+        collateralMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  const deployerCollateralAta = getAssociatedTokenAddressSync(
+    collateralMint,
+    deployer.publicKey,
+  );
+  const deployerAtaInfo = await connection.getAccountInfo(deployerCollateralAta);
+  const setupInstructions = [];
+  if (!deployerAtaInfo) {
+    setupInstructions.push(
+      createAssociatedTokenAccountInstruction(
+        deployer.publicKey,
+        deployerCollateralAta,
+        deployer.publicKey,
+        collateralMint,
+      ),
+    );
+  }
+
+  const depositAmount = 4 * LAMPORTS_PER_SOL;
+  setupInstructions.push(
+    SystemProgram.transfer({
+      fromPubkey: deployer.publicKey,
+      toPubkey: deployerCollateralAta,
+      lamports: depositAmount,
+    }),
+  );
+  setupInstructions.push(createSyncNativeInstruction(deployerCollateralAta));
+
+  if (setupInstructions.length > 0) {
+    const setupTx = new anchor.web3.Transaction().add(...setupInstructions);
+    await provider.sendAndConfirm(setupTx, [deployer]);
+  }
+
+  const userReceiptTokenAccount = getAssociatedTokenAddressSync(
+    receiptMint,
+    deployer.publicKey,
+  );
+
+  const encryptedBalance = Array.from({ length: 32 }, () => 0);
+  const clientPubkey = Array.from(deployer.publicKey.toBytes());
+
+  const depositSignature = await program.methods
+    .deposit(new BN(depositAmount), encryptedBalance, clientPubkey)
+    .accountsStrict({
+      user: deployer.publicKey,
+      vault,
+      userReceipt,
+      receiptMint,
+      userReceiptTokenAccount,
+      userCollateralAccount: deployerCollateralAta,
+      vaultCollateralAccount,
+      collateralMint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    })
+    .rpc();
+
+  console.log(`[deposit] 4 SOL (tokenized) into vault: ${depositSignature}`);
+
+  const usdcMint = await createMint(
+    connection,
+    deployer,
+    deployer.publicKey,
+    null,
+    6,
+  );
+
+  const vaultUsdcAta = await getOrCreateAssociatedTokenAccount(
+    connection,
+    deployer,
+    usdcMint,
+    vault,
+    true,
+  );
+  const usdcAmount = 1_000_000n * 1_000_000n;
+
+  await mintTo(
+    connection,
+    deployer,
+    usdcMint,
+    vaultUsdcAta.address,
+    deployer.publicKey,
+    usdcAmount,
+  );
+
+  const vaultCollateralBalance = await getAccount(connection, vaultCollateralAccount);
+  const vaultUsdcBalance = await getAccount(connection, vaultUsdcAta.address);
+
+  if (Number(vaultCollateralBalance.amount) !== depositAmount) {
+    throw new Error(
+      `Vault collateral mismatch: expected ${depositAmount}, got ${vaultCollateralBalance.amount}`,
+    );
+  }
+  if (Number(vaultUsdcBalance.amount) !== Number(usdcAmount)) {
+    throw new Error(
+      `Vault USDC mismatch: expected ${usdcAmount}, got ${vaultUsdcBalance.amount}`,
+    );
+  }
+
+  console.log('[verify] Vault balances OK');
+  console.log(`- Vault: ${vault.toBase58()}`);
+  console.log(`- Collateral mint (wSOL demo): ${collateralMint.toBase58()}`);
+  console.log(`- Vault collateral amount: ${vaultCollateralBalance.amount} (4 SOL)`);
+  console.log(`- USDC mint: ${usdcMint.toBase58()}`);
+  console.log(`- Vault USDC amount: ${vaultUsdcBalance.amount} (1,000,000 USDC)`);
+};
+
+run().catch((error) => {
+  const message =
+    error instanceof Error ? error.stack ?? error.message : String(error);
+  console.error(`[bootstrap] failed:\n${message}`);
+  process.exit(1);
+});

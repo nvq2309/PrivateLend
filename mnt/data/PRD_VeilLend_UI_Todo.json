@@ -1,0 +1,366 @@
+{
+  "meta": {
+    "product": "VeilLend",
+    "source_prd": "PRD_03_VeilLend_Privacy_Lending_Broker.md",
+    "version": "ui-flow-v0",
+    "generated_at": "2026-01-21",
+    "chain": "env.CHAIN (localnet|devnet)",
+    "ui_source": "/veillend"
+  },
+  "globals": {
+    "modes": [
+      "FAST",
+      "SECURE"
+    ],
+    "note": {
+      "max_active_notes_per_wallet": 1,
+      "seed_formula": "seed = timestamp + walletAddress + lastTxnId (lastTxnId=0 for initial note)",
+      "storage": "LOCAL_STORAGE",
+      "rotation": "after every successful SECURE action, lastTxnId becomes the new tx signature (or a deterministic tx id)"
+    }
+  },
+  "implementation_plan": [
+    {
+      "step": 1,
+      "title": "Contract & environment variables",
+      "deliverables": [
+        "env.CHAIN = localnet|devnet",
+        "env.DEPLOYER keypair",
+        "env.PUBLIC_WALLET keypair",
+        "Program list locked: Vault + Note/Receipt + UnderlyingAdapter (optional)"
+      ]
+    },
+    {
+      "step": 2,
+      "title": "Repo scaffold",
+      "deliverables": [
+        "Anchor workspace in /programs",
+        "Vite app in repo root (/src, /vite.config.ts)",
+        "UI migrated from /veillend design",
+        "Scripts in /scripts (bootstrap + tests)"
+      ]
+    },
+    {
+      "step": 3,
+      "title": "Vault core (Supply/Withdraw)",
+      "deliverables": [
+        "Vault holds SOL and SPL tokens",
+        "Supply and Withdraw instructions",
+        "Vault accounting (shares or receipt)"
+      ]
+    },
+    {
+      "step": 4,
+      "title": "Note schema + deterministic update",
+      "deliverables": [
+        "Note schema (commitment hash + metadata)",
+        "Deterministic seed rule implemented",
+        "Exactly one active note per wallet enforced"
+      ]
+    },
+    {
+      "step": 5,
+      "title": "SECURE mode (proof generation + note output)",
+      "deliverables": [
+        "Client computes secret proof (zk or placeholder) and note",
+        "UI shows progress + outputs note",
+        "Save-to-storage writes note to LOCAL_STORAGE"
+      ]
+    },
+    {
+      "step": 6,
+      "title": "FAST mode routing adapter",
+      "deliverables": [
+        "Directly routes to underlying lending protocol or demo stub",
+        "Uniform adapter interface: supply/borrow/repay/withdraw"
+      ]
+    },
+    {
+      "step": 7,
+      "title": "Supply UI flow (FAST + SECURE)",
+      "deliverables": [
+        "Mode toggle on Supply",
+        "FAST path submits tx immediately",
+        "SECURE path generates proof -> note -> optional local save"
+      ]
+    },
+    {
+      "step": 8,
+      "title": "Borrow/Repay/Withdraw parity",
+      "deliverables": [
+        "Borrow, Repay, Withdraw each support FAST/SECURE",
+        "Note rotates per successful SECURE tx"
+      ]
+    },
+    {
+      "step": 9,
+      "title": "Portfolio page",
+      "deliverables": [
+        "If missing note: force paste/import or create initial note",
+        "If note exists: show positions and actions"
+      ]
+    },
+    {
+      "step": 10,
+      "title": "Demo bootstrap script",
+      "deliverables": [
+        "Deploy all programs",
+        "Airdrop DEPLOYER 5 SOL; supply 4 SOL to Vault",
+        "Create project USDC mint; mint 10^6 USDC to Vault",
+        "Airdrop PUBLIC_WALLET 2 SOL",
+        "Assert final balances"
+      ]
+    },
+    {
+      "step": 11,
+      "title": "Automated acceptance tests",
+      "deliverables": [
+        "UI tests for flows",
+        "Onchain assertions for balances, notes, and position updates"
+      ]
+    },
+    {
+      "step": 12,
+      "title": "Hardening + demo script",
+      "deliverables": [
+        "Error states and fallbacks",
+        "3-minute demo script",
+        "Recorded happy path and recovery path"
+      ]
+    }
+  ],
+  "user_stories": [
+    {
+      "id": "US-BOOT-01",
+      "as_a": "developer",
+      "i_want": "a single bootstrap command that deploys programs and seeds balances",
+      "so_that": "every UI demo starts from the same deterministic state",
+      "todo": [
+        "Implement scripts/bootstrap.ts (localnet + devnet)",
+        "Create/read env.DEPLOYER and env.PUBLIC_WALLET",
+        "Deploy programs and run init instructions",
+        "Airdrop/mint and assert balances"
+      ]
+    },
+    {
+      "id": "US-NOTE-01",
+      "as_a": "user",
+      "i_want": "exactly one note that proves ownership of my private position",
+      "so_that": "I can later manage my position without revealing it publicly",
+      "todo": [
+        "Define Note format (commitment hash + metadata)",
+        "Enforce 1 active note per wallet",
+        "Implement seed rule: timestamp + walletAddress + lastTxnId",
+        "Implement note rotation after every SECURE tx"
+      ]
+    },
+    {
+      "id": "US-SUPPLY-01",
+      "as_a": "user",
+      "i_want": "to supply assets in FAST mode",
+      "so_that": "I can get speed when privacy is not needed",
+      "todo": [
+        "Supply UI with FAST toggle",
+        "FAST routes directly to underlying adapter.supply",
+        "Update portfolio state from chain indexer/RPC"
+      ]
+    },
+    {
+      "id": "US-SUPPLY-02",
+      "as_a": "user",
+      "i_want": "to supply assets in SECURE mode",
+      "so_that": "my position ownership is represented by a secret proof and note",
+      "todo": [
+        "SECURE flow generates ZK proof (or demo placeholder) client-side",
+        "Return note to UI (display + copy)",
+        "Provide Save-to-storage to LOCAL_STORAGE",
+        "Route tx through secure path and rotate note"
+      ]
+    },
+    {
+      "id": "US-ACTIONS-01",
+      "as_a": "user",
+      "i_want": "Borrow/Repay/Withdraw to work the same way as Supply",
+      "so_that": "I don't have to relearn privacy mechanics per action",
+      "todo": [
+        "Add mode toggle to Borrow/Repay/Withdraw",
+        "FAST uses direct routing",
+        "SECURE generates proof + note and rotates note",
+        "Uniform confirmation screens"
+      ]
+    },
+    {
+      "id": "US-PORTFOLIO-01",
+      "as_a": "user",
+      "i_want": "a Portfolio view that requires a note when in privacy mode",
+      "so_that": "the app can locate my private receipts and show my positions",
+      "todo": [
+        "On load: check LOCAL_STORAGE for note",
+        "If missing: prompt paste/import OR create initial note",
+        "If present: load positions and enable actions",
+        "Show note last-updated timestamp and lastTxnId"
+      ]
+    }
+  ],
+  "acceptance_tests": [
+    {
+      "id": "AT-BOOT-01",
+      "category": "functional",
+      "description": "Initialize all contracts & deploy to specified chain (localnet/devnet)",
+      "steps": [
+        "Set env.CHAIN to localnet or devnet",
+        "Run bootstrap script",
+        "Verify all required programs are deployed: Vault + Note/Receipt + Adapter",
+        "Verify init instructions executed (vault state accounts exist)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-BOOT-02",
+      "category": "functional",
+      "description": "Airdrop env.DEPLOYER 5 SOL and supply 4 SOL into Vault",
+      "steps": [
+        "Airdrop 5 SOL to env.DEPLOYER",
+        "From env.DEPLOYER, submit supply(4 SOL)",
+        "Assert env.DEPLOYER balance decreased by ~4 SOL + fees",
+        "Assert vault SOL balance increased by 4 SOL"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-BOOT-03",
+      "category": "functional",
+      "description": "Create project USDC mint and mint 10^6 USDC into Vault",
+      "steps": [
+        "Create USDC mint (project-owned)",
+        "Create vault token account for USDC",
+        "Mint 1,000,000 USDC to the vault token account",
+        "Assert vault USDC token account balance == 1,000,000"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-BOOT-04",
+      "category": "functional",
+      "description": "After bootstrap, Vault has 4 SOL + 10^6 USDC",
+      "steps": [
+        "Query vault SOL balance",
+        "Query vault USDC token account balance",
+        "Assert SOL == 4 SOL",
+        "Assert USDC == 1,000,000"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-BOOT-05",
+      "category": "functional",
+      "description": "Airdrop env.PUBLIC_WALLET 2 SOL",
+      "steps": [
+        "Airdrop 2 SOL to env.PUBLIC_WALLET",
+        "Assert env.PUBLIC_WALLET balance == 2 SOL (minus possible fees if used)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-NOTE-01",
+      "category": "functional",
+      "description": "Each wallet has exactly one active note; seed rule uses timestamp + walletAddress + lastTxnId",
+      "steps": [
+        "Connect wallet A",
+        "Create initial note (lastTxnId=0)",
+        "Perform SECURE Supply; capture new note",
+        "Assert only one note is marked active in LOCAL_STORAGE for wallet A",
+        "Assert note seed inputs reflect (timestamp, walletAddress=A, lastTxnId=txid from previous action)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-SUPPLY-FAST-01",
+      "category": "functional",
+      "description": "Supply (FAST): routes directly to underlying lending adapter",
+      "steps": [
+        "Connect wallet env.PUBLIC_WALLET",
+        "Open Supply page",
+        "Select FAST mode",
+        "Supply a small amount of SOL/USDC",
+        "Verify tx signature exists and adapter.supply called",
+        "Verify no note/proof UI is required"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-SUPPLY-SECURE-01",
+      "category": "functional",
+      "description": "Supply (SECURE): generates ZK proof, returns a note, and Save-to-storage writes LOCAL_STORAGE",
+      "steps": [
+        "Connect wallet env.PUBLIC_WALLET",
+        "Open Supply page",
+        "Select SECURE mode",
+        "Start supply",
+        "Wait for proof generation step to complete",
+        "Verify UI shows proof blob (or proof hash) and a note",
+        "Click 'Save to storage'",
+        "Verify note is stored in LOCAL_STORAGE under wallet-specific key"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-ACTIONS-PARITY-01",
+      "category": "functional",
+      "description": "Borrow/Repay/Withdraw each support FAST and SECURE modes with the same note/proof flow",
+      "steps": [
+        "From a wallet with an existing note, run Borrow in FAST mode; verify no proof UI",
+        "Run Borrow in SECURE mode; verify proof->note->optional local save",
+        "Repeat the above for Repay",
+        "Repeat the above for Withdraw"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-PORTFOLIO-01",
+      "category": "functional",
+      "description": "Portfolio requires a note: if missing, require paste/import or create initial note",
+      "steps": [
+        "Clear LOCAL_STORAGE for the app domain",
+        "Open Portfolio",
+        "Verify app blocks position display and prompts for note import or create initial note",
+        "Create initial note",
+        "Verify positions view becomes accessible"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-CORE-LEND-01",
+      "category": "functional",
+      "description": "Deposit/Supply creates receipt/note and updates broker aggregate position",
+      "steps": [
+        "Perform Supply",
+        "Verify receipt or note generated",
+        "Verify aggregate position (broker account) updates accordingly"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-CORE-LEND-02",
+      "category": "functional",
+      "description": "Borrow delivers assets to user and updates debt",
+      "steps": [
+        "Perform Borrow",
+        "Verify user receives borrowed asset",
+        "Verify debt state increased in broker aggregate"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-CORE-LEND-03",
+      "category": "functional",
+      "description": "Repay reduces debt and enables Withdraw when safe",
+      "steps": [
+        "Perform Repay",
+        "Verify debt reduced",
+        "Attempt Withdraw; verify it is allowed only when safe"
+      ],
+      "passes": false
+    }
+  ]
+}

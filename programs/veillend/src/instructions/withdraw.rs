@@ -15,7 +15,7 @@ pub struct Withdraw<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump = vault.bump,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(
         mut,
@@ -23,35 +23,35 @@ pub struct Withdraw<'info> {
         bump = user_receipt.bump,
         constraint = user_receipt.owner == user.key(),
     )]
-    pub user_receipt: Account<'info, UserReceipt>,
+    pub user_receipt: Box<Account<'info, UserReceipt>>,
 
     #[account(
         mut,
         constraint = receipt_mint.key() == vault.receipt_mint
     )]
-    pub receipt_mint: Account<'info, Mint>,
+    pub receipt_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
         associated_token::mint = receipt_mint,
         associated_token::authority = user,
     )]
-    pub user_receipt_token_account: Account<'info, TokenAccount>,
+    pub user_receipt_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = user_collateral_account.mint == vault.collateral_mint
     )]
-    pub user_collateral_account: Account<'info, TokenAccount>,
+    pub user_collateral_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         seeds = [VAULT_COLLATERAL_SEED, vault.key().as_ref()],
         bump,
     )]
-    pub vault_collateral_account: Account<'info, TokenAccount>,
+    pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
 
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -91,10 +91,12 @@ pub fn withdraw(
     );
     token::burn(burn_ctx, shares_to_burn)?;
 
+    let collateral_mint_key = ctx.accounts.collateral_mint.key();
+    let bump = ctx.accounts.vault.bump;
     let seeds = &[
         VAULT_SEED,
-        ctx.accounts.collateral_mint.key().as_ref(),
-        &[ctx.accounts.vault.bump],
+        collateral_mint_key.as_ref(),
+        &[bump],
     ];
     let signer_seeds = &[&seeds[..]];
 

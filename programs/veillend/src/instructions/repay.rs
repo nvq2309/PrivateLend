@@ -15,7 +15,7 @@ pub struct Repay<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump = vault.bump,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(
         mut,
@@ -23,17 +23,17 @@ pub struct Repay<'info> {
         bump = user_receipt.bump,
         constraint = user_receipt.owner == user.key(),
     )]
-    pub user_receipt: Account<'info, UserReceipt>,
+    pub user_receipt: Box<Account<'info, UserReceipt>>,
 
     #[account(mut)]
-    pub user_repay_account: Account<'info, TokenAccount>,
+    pub user_repay_account: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
-    pub vault_repay_account: Account<'info, TokenAccount>,
+    pub vault_repay_account: Box<Account<'info, TokenAccount>>,
 
-    pub collateral_mint: Account<'info, anchor_spl::token::Mint>,
+    pub collateral_mint: Box<Account<'info, anchor_spl::token::Mint>>,
     #[account(constraint = repay_mint.key() == vault.borrow_mint)]
-    pub repay_mint: Account<'info, anchor_spl::token::Mint>,
+    pub repay_mint: Box<Account<'info, anchor_spl::token::Mint>>,
     pub token_program: Program<'info, Token>,
 }
 

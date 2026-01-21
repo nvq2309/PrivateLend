@@ -16,58 +16,19 @@ pub struct Initialize<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump,
     )]
-    pub vault: Account<'info, Vault>,
-    
-    #[account(
-        init,
-        payer = authority,
-        seeds = [RECEIPT_MINT_SEED, vault.key().as_ref()],
-        bump,
-        mint::decimals = 9,
-        mint::authority = vault,
-    )]
-    pub receipt_mint: Account<'info, Mint>,
-
-    #[account(
-        init,
-        payer = authority,
-        seeds = [BORROW_MINT_SEED, vault.key().as_ref()],
-        bump,
-        mint::decimals = 9,
-        mint::authority = vault,
-    )]
-    pub borrow_mint: Account<'info, Mint>,
-
-    #[account(
-        init,
-        payer = authority,
-        space = ProtectionPool::LEN,
-        seeds = [PROTECTION_POOL_SEED, vault.key().as_ref()],
-        bump,
-    )]
-    pub protection_pool: Account<'info, ProtectionPool>,
+    pub vault: Box<Account<'info, Vault>>,
     
     #[account(
         init,
         payer = authority,
         token::mint = collateral_mint,
-        token::authority = vault_collateral_account,
+        token::authority = vault,
         seeds = [VAULT_COLLATERAL_SEED, vault.key().as_ref()],
         bump,
     )]
-    pub vault_collateral_account: Account<'info, TokenAccount>,
+    pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
     
-    #[account(
-        init,
-        payer = authority,
-        token::mint = collateral_mint,
-        token::authority = protection_reserve_account,
-        seeds = [PROTECTION_RESERVE_SEED, vault.key().as_ref()],
-        bump,
-    )]
-    pub protection_reserve_account: Account<'info, TokenAccount>,
-    
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
@@ -81,8 +42,7 @@ pub fn initialize(
     let vault = &mut ctx.accounts.vault;
     vault.authority = ctx.accounts.authority.key();
     vault.collateral_mint = ctx.accounts.collateral_mint.key();
-    vault.receipt_mint = ctx.accounts.receipt_mint.key();
-    vault.borrow_mint = ctx.accounts.borrow_mint.key();
+    // Receipt/Borrow mints initialized in initialize_mints
     vault.total_collateral = 0;
     vault.total_borrowed = 0;
     vault.total_shares = 0;
@@ -90,16 +50,6 @@ pub fn initialize(
     vault.liquidation_threshold_bps = liquidation_threshold_bps;
     vault.is_paused = false;
     vault.bump = ctx.bumps.vault;
-    
-    let protection_pool = &mut ctx.accounts.protection_pool;
-    protection_pool.vault = vault.key();
-    protection_pool.reserve_balance = 0;
-    protection_pool.total_coverage = 0;
-    protection_pool.total_subscribers = 0;
-    protection_pool.total_executions = 0;
-    protection_pool.total_premium_collected = 0;
-    protection_pool.total_protection_paid = 0;
-    protection_pool.bump = ctx.bumps.protection_pool;
     
     emit!(VaultInitializedEvent {
         vault: vault.key(),

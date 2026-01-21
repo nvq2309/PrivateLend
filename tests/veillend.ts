@@ -33,7 +33,6 @@ describe("VeilLend with Protection & Privacy", () => {
   // Test accounts
   let collateralMint: PublicKey;
   let vault: PublicKey;
-  let vaultBump: number;
   let protectionPool: PublicKey;
   let vaultCollateralAccount: PublicKey;
   let protectionReserveAccount: PublicKey;
@@ -52,8 +51,8 @@ describe("VeilLend with Protection & Privacy", () => {
   const LIQUIDATION_THRESHOLD_BPS = new anchor.BN(8500); // 85%
   const DEPOSIT_AMOUNT = new anchor.BN(10 * LAMPORTS_PER_SOL);
   const BORROW_AMOUNT = new anchor.BN(5 * LAMPORTS_PER_SOL);
-  const REPAY_AMOUNT = new anchor.BN(2 * LAMPORTS_PER_SOL);
-  const WITHDRAW_AMOUNT = new anchor.BN(3 * LAMPORTS_PER_SOL);
+  // const REPAY_AMOUNT = new anchor.BN(2 * LAMPORTS_PER_SOL);
+  // const WITHDRAW_AMOUNT = new anchor.BN(3 * LAMPORTS_PER_SOL);
 
   before(async () => {
     // Airdrop SOL to user for transaction fees
@@ -73,7 +72,7 @@ describe("VeilLend with Protection & Privacy", () => {
     );
 
     // Derive PDAs
-    [vault, vaultBump] = PublicKey.findProgramAddressSync(
+    [vault] = PublicKey.findProgramAddressSync(
       [Buffer.from("vault"), collateralMint.toBuffer()],
       program.programId
     );
@@ -143,14 +142,42 @@ describe("VeilLend with Protection & Privacy", () => {
     it("should initialize vault and protection pool", async () => {
       await program.methods
         .initialize(LTV_BPS, LIQUIDATION_THRESHOLD_BPS)
-        .accounts({
+        .accountsStrict({
+          authority: authority.publicKey,
+          vault,
+          // protectionPool, // Moved
+          vaultCollateralAccount,
+          // protectionReserveAccount, // Moved
+          // receiptMint, // Moved
+          // borrowMint, // Moved
+          collateralMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+
+      await program.methods
+        .initializeMints()
+        .accountsStrict({
+          authority: authority.publicKey,
+          vault,
+          receiptMint,
+          borrowMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+
+
+      await program.methods
+        .initializeProtection()
+        .accountsStrict({
           authority: authority.publicKey,
           vault,
           protectionPool,
-          vaultCollateralAccount,
           protectionReserveAccount,
-          receiptMint,
-          borrowMint,
           collateralMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -177,7 +204,7 @@ describe("VeilLend with Protection & Privacy", () => {
 
       await program.methods
         .deposit(DEPOSIT_AMOUNT, encryptedBalance, clientKey)
-        .accounts({
+        .accountsStrict({
           user: user.publicKey,
           vault,
           userReceipt,
@@ -221,7 +248,7 @@ describe("VeilLend with Protection & Privacy", () => {
       
       await program.methods
         .borrow(BORROW_AMOUNT, encryptedBalance)
-        .accounts({
+        .accountsStrict({
           // Note: borrow instruction accounts need to be checked against borrow.rs
           // HEAD borrow.rs likely needs standard args. Let's assume standard set for now.
           // If HEAD borrow.rs is standard: user, vault, user_receipt, vault_collateral_account...
@@ -237,10 +264,16 @@ describe("VeilLend with Protection & Privacy", () => {
              user: user.publicKey,
              vault,
              userReceipt,
-             vaultCollateralAccount,
-             userTokenAccount: userCollateralAccountAddr,
+             // vaultCollateralAccount, // Not in borrow.rs
+             userBorrowAccount: userCollateralAccountAddr,
              // If borrow.rs uses modifiers like `token_program` etc.
+             collateralMint,
+             borrowMint,
              tokenProgram: TOKEN_PROGRAM_ID,
+             // Add missing Kamino accounts (dummies)
+             kaminoMarket: Keypair.generate().publicKey,
+             kaminoObligation: Keypair.generate().publicKey,
+             kaminoProgram: Keypair.generate().publicKey,
         })
         .signers([user]) 
         .rpc();

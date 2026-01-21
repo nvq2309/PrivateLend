@@ -30,3 +30,6 @@ target/
 # Anchor
 .anchor/
 test-ledger/
+
+# Local keys
+.keys/

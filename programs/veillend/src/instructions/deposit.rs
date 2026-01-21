@@ -16,7 +16,7 @@ pub struct Deposit<'info> {
         seeds = [VAULT_SEED, collateral_mint.key().as_ref()],
         bump = vault.bump,
     )]
-    pub vault: Account<'info, Vault>,
+    pub vault: Box<Account<'info, Vault>>,
 
     #[account(
         init_if_needed,
@@ -25,13 +25,13 @@ pub struct Deposit<'info> {
         seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
         bump,
     )]
-    pub user_receipt: Account<'info, UserReceipt>,
+    pub user_receipt: Box<Account<'info, UserReceipt>>,
 
     #[account(
         mut,
         constraint = receipt_mint.key() == vault.receipt_mint
     )]
-    pub receipt_mint: Account<'info, Mint>,
+    pub receipt_mint: Box<Account<'info, Mint>>,
 
     #[account(
         init_if_needed,
@@ -39,22 +39,22 @@ pub struct Deposit<'info> {
         associated_token::mint = receipt_mint,
         associated_token::authority = user,
     )]
-    pub user_receipt_token_account: Account<'info, TokenAccount>,
+    pub user_receipt_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         constraint = user_collateral_account.mint == vault.collateral_mint
     )]
-    pub user_collateral_account: Account<'info, TokenAccount>,
+    pub user_collateral_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         seeds = [VAULT_COLLATERAL_SEED, vault.key().as_ref()],
         bump,
     )]
-    pub vault_collateral_account: Account<'info, TokenAccount>,
+    pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
 
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -96,10 +96,12 @@ pub fn deposit(
     );
     token::transfer(transfer_ctx, amount)?;
 
+    let collateral_mint_key = ctx.accounts.collateral_mint.key();
+    let bump = vault.bump;
     let seeds = &[
         VAULT_SEED,
-        ctx.accounts.collateral_mint.key().as_ref(),
-        &[vault.bump],
+        collateral_mint_key.as_ref(),
+        &[bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
@@ -124,9 +126,7 @@ pub fn deposit(
         .ok_or(VeilLendError::MathOverflow)?;
 
     if user_receipt.bump == 0 {
-        if let Some(bump) = ctx.bumps.get("user_receipt") {
-            user_receipt.bump = *bump;
-        }
+        user_receipt.bump = ctx.bumps.user_receipt;
         // Initialize protection fields
         user_receipt.protection_tier = 0;
         user_receipt.protection_expiry = 0;

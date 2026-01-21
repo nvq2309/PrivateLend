@@ -13,11 +13,11 @@ pub struct Vault {
     pub liquidation_threshold_bps: u64, // from PR#2
     pub is_paused: bool,
     pub bump: u8,
-    pub reserved: [u8; 64],
+    pub reserved: [u8; 16],
 }
 
 impl Vault {
-    pub const INIT_SPACE: usize = 32 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 64;
+    pub const INIT_SPACE: usize = 8 + 32 + 32 + 32 + 32 + 8 + 8 + 8 + 8 + 8 + 1 + 1 + 16;
 }
 
 #[account]
@@ -44,7 +44,6 @@ impl UserReceipt {
 
 // Add ProtectionPool from PR#2
 #[account]
-#[derive(Default)]
 pub struct ProtectionPool {
     pub vault: Pubkey,
     pub reserve_balance: u64,
@@ -54,9 +53,9 @@ pub struct ProtectionPool {
     pub total_premium_collected: u64,
     pub total_protection_paid: u64,
     pub bump: u8,
-    pub reserve_padding: [u8; 64],
+    pub reserve_padding: [u8; 16],
 }
 
 impl ProtectionPool {
-    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 64;
+    pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 16;
 }

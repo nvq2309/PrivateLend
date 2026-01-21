@@ -9,7 +9,7 @@ import {
 
 import { Veillend } from '../../target/types/veillend';
 
-const VAULT_SEED = Buffer.from('vault');
+// const VAULT_SEED = Buffer.from('vault');
 const USER_RECEIPT_SEED = Buffer.from('user_receipt');
 const VAULT_COLLATERAL_SEED = Buffer.from('vault_collateral');
 
@@ -79,7 +79,7 @@ export class VeilLendSDK {
 
     const tx = await this.program.methods
       .deposit(new BN(amount), encryptedBalance, clientPubkey)
-      .accounts({
+      .accountsStrict({
         user: wallet.publicKey,
         vault: vaultAddress,
         userReceipt: userReceiptPda,
@@ -130,7 +130,7 @@ export class VeilLendSDK {
 
     const tx = await this.program.methods
       .withdraw(new BN(shares), encryptedBalance)
-      .accounts({
+      .accountsStrict({
         user: wallet.publicKey,
         vault: vaultAddress,
         userReceipt: userReceiptPda,
@@ -168,7 +168,7 @@ export class VeilLendSDK {
 
     const tx = await this.program.methods
       .borrow(new BN(amount), encryptedBalance)
-      .accounts({
+      .accountsStrict({
         user: wallet.publicKey,
         vault: vaultAddress,
         userReceipt: userReceiptPda,
@@ -212,7 +212,7 @@ export class VeilLendSDK {
 
     const tx = await this.program.methods
       .repay(new BN(repayAmount.toString()), encryptedBalance)
-      .accounts({
+      .accountsStrict({
         user: wallet.publicKey,
         vault: vaultAddress,
         userReceipt: userReceiptPda,
