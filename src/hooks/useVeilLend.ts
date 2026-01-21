@@ -704,6 +704,11 @@ export const useVeilLend = (mint?: PublicKey) => {
       );
       const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
 
+      // Kamino accounts are placeholders (TODO in on-chain program)
+      const kaminoMarket = PublicKey.default;
+      const kaminoObligation = PublicKey.default;
+      const kaminoProgram = PublicKey.default;
+
       const ix = new TransactionInstruction({
         programId,
         keys: [
@@ -711,12 +716,12 @@ export const useVeilLend = (mint?: PublicKey) => {
           { pubkey: vaultAddress, isSigner: false, isWritable: true },
           { pubkey: userReceiptPda, isSigner: false, isWritable: true },
           { pubkey: userBorrowAta, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: kaminoMarket, isSigner: false, isWritable: false },
+          { pubkey: kaminoObligation, isSigner: false, isWritable: false },
           { pubkey: collateral, isSigner: false, isWritable: false },
           { pubkey: borrowMint, isSigner: false, isWritable: false },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: kaminoProgram, isSigner: false, isWritable: false },
         ],
         data: encodeInstruction('borrow', {
           amount: new BN(amount),

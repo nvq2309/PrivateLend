@@ -51,6 +51,43 @@ const resolveSymbol = (mint?: PublicKey | null) => {
 const toShortHash = (value: string, length = 10) =>
   value.length > length ? `${value.slice(0, length)}...` : value;
 
+const VEILLEND_ERROR_MAP: Record<string, string> = {
+  VaultPaused: 'The vault is currently paused. Please try again later.',
+  InsufficientCollateral: 'You don\'t have enough collateral for this action.',
+  InsufficientShares: 'You don\'t have enough shares to withdraw.',
+  OutstandingDebt: 'Please repay your debt before withdrawing.',
+  BorrowLimitExceeded: 'This would exceed your borrowing limit (75% LTV).',
+  MathOverflow: 'Calculation error. Try a smaller amount.',
+  InsufficientLiquidity: 'Not enough liquidity in the vault.',
+  HealthFactorTooLow: 'Your health factor is too low for this operation.',
+  InvalidProtectionTier: 'Invalid protection tier selected.',
+  NoProtection: 'You don\'t have an active protection subscription.',
+  ProtectionExpired: 'Your protection subscription has expired.',
+};
+
+const parseTransactionError = (error: unknown): string => {
+  const message = error instanceof Error ? error.message : String(error);
+
+  for (const [code, friendly] of Object.entries(VEILLEND_ERROR_MAP)) {
+    if (message.includes(code)) return friendly;
+  }
+
+  if (message.includes('insufficient funds') || message.includes('0x1')) {
+    return 'Insufficient funds for this transaction.';
+  }
+  if (message.includes('User rejected')) {
+    return 'Transaction cancelled by user.';
+  }
+  if (message.includes('Blockhash not found') || message.includes('block height exceeded')) {
+    return 'Transaction expired. Please try again.';
+  }
+  if (message.includes('AccountNotFound')) {
+    return 'Account not found. You may need to deposit first.';
+  }
+
+  return message.length > 120 ? `${message.slice(0, 120)}...` : message;
+};
+
 const App = () => {
   const { publicKey } = useWallet();
   const [view, setView] = useState<'MARKET' | 'PORTFOLIO'>('MARKET');
@@ -236,8 +273,7 @@ const App = () => {
       closeAction();
       showActionSuccess(`${actionLabel} completed successfully.`, mode === 'SECURE' && Boolean(nextNote));
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Transaction failed.';
-      setActionError(message);
+      setActionError(parseTransactionError(error));
     } finally {
       setActionBusy(false);
       setActionMessage('');
@@ -326,8 +362,7 @@ const App = () => {
     try {
       await subscribeProtection(tranche.tier, 30);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Protection purchase failed.';
-      showPageError(message);
+      showPageError(parseTransactionError(error));
     }
   };
 
@@ -346,8 +381,7 @@ const App = () => {
       await fastAdapter.supply(seedAmountLamports);
       showActionSuccess(`Seeded vault with 1,000 ${collateralSymbol}.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Vault seed failed.';
-      setSeedError(message);
+      setSeedError(parseTransactionError(error));
     } finally {
       setSeedBusy(false);
     }
