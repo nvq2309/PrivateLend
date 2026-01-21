@@ -343,6 +343,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         setWalletBalanceLamports(0);
         setCollateralBalanceLamports(0);
         setBorrowBalanceLamports(0);
+        setUsdcBalanceLamports(0);
       }
 
       if (!programId || !vaultAddress) {

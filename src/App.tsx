@@ -670,34 +670,56 @@ const App = () => {
           </div>
 
           <div className="space-y-6">
-            <section className="glass rounded-3xl p-6 border-white/10">
-              <RiskIndicator health={healthFactor} label="Personal Health" />
-              
-              <div className="mt-4 pt-4 border-t border-white/5">
-                <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
-                  Wallet Balances
-                </p>
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-300 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                      SOL
-                    </span>
-                    <span className="font-bold font-mono">
-                      {formatAmount(walletBalanceLamports, 9, 4)}
-                    </span>
+            <section className="glass rounded-3xl p-5 border-cyan-500/30 bg-gradient-to-br from-cyan-500/[0.08] to-blue-500/[0.04]">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center">
+                  <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                  </svg>
+                </div>
+                <h3 className="text-xs font-black uppercase tracking-widest text-cyan-300">
+                  Wallet Balance
+                </h3>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between bg-black/20 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center font-bold text-xs text-white">
+                      S
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200">SOL</span>
                   </div>
-                  <div className="flex justify-between text-xs">
-                    <span className="text-slate-300 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                      USDC
-                    </span>
-                    <span className="font-bold font-mono">
-                      {formatAmount(usdcBalanceLamports, 6, 2)}
-                    </span>
+                  <span className="text-lg font-bold font-mono text-white">
+                    {formatAmount(walletBalanceLamports, 9, 4)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between bg-black/20 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-cyan-500 flex items-center justify-center font-bold text-xs text-white">
+                      $
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200">USDC</span>
                   </div>
+                  <span className="text-lg font-bold font-mono text-white">
+                    {formatAmount(usdcBalanceLamports, 6, 2)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between bg-black/20 rounded-xl px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center font-bold text-xs text-white">
+                      B
+                    </div>
+                    <span className="text-sm font-semibold text-slate-200">Borrow Token</span>
+                  </div>
+                  <span className="text-lg font-bold font-mono text-white">
+                    {formatAmount(borrowBalanceLamports, borrowDecimals, 2)}
+                  </span>
                 </div>
               </div>
+            </section>
+
+            <section className="glass rounded-3xl p-6 border-white/10">
+              <RiskIndicator health={healthFactor} label="Personal Health" />
 
               <div className="mt-4 pt-4 border-t border-white/5">
                 <p className="text-[10px] uppercase tracking-widest text-slate-400 font-bold mb-3">
