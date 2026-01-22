@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 pub mod constants;
 pub mod errors;
 pub mod instructions;
+pub mod merkle;
 pub mod state;
 
 use instructions::*;
@@ -34,6 +35,12 @@ pub mod veillend {
         instructions::initialize_protection::initialize_protection(ctx)
     }
 
+    pub fn initialize_merkle_tree(
+        ctx: Context<InitializeMerkleTree>,
+    ) -> Result<()> {
+        instructions::initialize_merkle_tree::initialize_merkle_tree(ctx)
+    }
+
     // From main - with Arcium encryption
     pub fn deposit(
         ctx: Context<Deposit>,
@@ -44,12 +51,72 @@ pub mod veillend {
         instructions::deposit::deposit(ctx, amount, encrypted_balance, client_pubkey)
     }
 
+    pub fn deposit_secure(
+        ctx: Context<DepositSecure>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+        client_pubkey: [u8; 32],
+        commitment: [u8; 32],
+    ) -> Result<()> {
+        instructions::deposit_secure::deposit_secure(
+            ctx,
+            amount,
+            encrypted_balance,
+            client_pubkey,
+            commitment,
+        )
+    }
+
+    pub fn deposit_secure_spend(
+        ctx: Context<DepositSecureSpend>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+        current_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        nullifier: [u8; 32],
+        merkle_proof: Vec<[u8; 32]>,
+        merkle_path: Vec<u8>,
+    ) -> Result<()> {
+        instructions::deposit_secure_spend::deposit_secure_spend(
+            ctx,
+            amount,
+            encrypted_balance,
+            current_commitment,
+            new_commitment,
+            nullifier,
+            merkle_proof,
+            merkle_path,
+        )
+    }
+
     pub fn withdraw(
         ctx: Context<Withdraw>,
         shares_to_burn: u64,
         encrypted_balance: [u8; 32],
     ) -> Result<()> {
         instructions::withdraw::withdraw(ctx, shares_to_burn, encrypted_balance)
+    }
+
+    pub fn withdraw_secure(
+        ctx: Context<WithdrawSecure>,
+        shares_to_burn: u64,
+        encrypted_balance: [u8; 32],
+        current_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        nullifier: [u8; 32],
+        merkle_proof: Vec<[u8; 32]>,
+        merkle_path: Vec<u8>,
+    ) -> Result<()> {
+        instructions::withdraw_secure::withdraw_secure(
+            ctx,
+            shares_to_burn,
+            encrypted_balance,
+            current_commitment,
+            new_commitment,
+            nullifier,
+            merkle_proof,
+            merkle_path,
+        )
     }
 
     pub fn borrow(
@@ -60,12 +127,56 @@ pub mod veillend {
         instructions::borrow::borrow(ctx, amount, encrypted_balance)
     }
 
+    pub fn borrow_secure(
+        ctx: Context<BorrowSecure>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+        current_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        nullifier: [u8; 32],
+        merkle_proof: Vec<[u8; 32]>,
+        merkle_path: Vec<u8>,
+    ) -> Result<()> {
+        instructions::borrow_secure::borrow_secure(
+            ctx,
+            amount,
+            encrypted_balance,
+            current_commitment,
+            new_commitment,
+            nullifier,
+            merkle_proof,
+            merkle_path,
+        )
+    }
+
     pub fn repay(
         ctx: Context<Repay>,
         amount: u64,
         encrypted_balance: [u8; 32],
     ) -> Result<()> {
         instructions::repay::repay(ctx, amount, encrypted_balance)
+    }
+
+    pub fn repay_secure(
+        ctx: Context<RepaySecure>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+        current_commitment: [u8; 32],
+        new_commitment: [u8; 32],
+        nullifier: [u8; 32],
+        merkle_proof: Vec<[u8; 32]>,
+        merkle_path: Vec<u8>,
+    ) -> Result<()> {
+        instructions::repay_secure::repay_secure(
+            ctx,
+            amount,
+            encrypted_balance,
+            current_commitment,
+            new_commitment,
+            nullifier,
+            merkle_proof,
+            merkle_path,
+        )
     }
 
     // From PR#2 - protection system

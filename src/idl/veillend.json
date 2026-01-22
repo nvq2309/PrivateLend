@@ -91,6 +91,39 @@
           "name": "kamino_obligation"
         },
         {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "kamino_borrow_reserve"
+        },
+        {
+          "name": "kamino_borrow_reserve_liquidity_mint"
+        },
+        {
+          "name": "kamino_reserve_source_liquidity"
+        },
+        {
+          "name": "kamino_borrow_reserve_liquidity_fee_receiver"
+        },
+        {
+          "name": "kamino_referrer_token_state"
+        },
+        {
+          "name": "kamino_instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_pyth_oracle"
+        },
+        {
+          "name": "kamino_switchboard_price_oracle"
+        },
+        {
+          "name": "kamino_switchboard_twap_oracle"
+        },
+        {
+          "name": "kamino_scope_prices"
+        },
+        {
           "name": "collateral_mint"
         },
         {
@@ -925,8 +958,34 @@
           "writable": true
         },
         {
-          "name": "vault_repay_account",
-          "writable": true
+          "name": "kamino_market"
+        },
+        {
+          "name": "kamino_obligation"
+        },
+        {
+          "name": "kamino_repay_reserve"
+        },
+        {
+          "name": "kamino_reserve_liquidity_mint"
+        },
+        {
+          "name": "kamino_reserve_destination_liquidity"
+        },
+        {
+          "name": "kamino_instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_pyth_oracle"
+        },
+        {
+          "name": "kamino_switchboard_price_oracle"
+        },
+        {
+          "name": "kamino_switchboard_twap_oracle"
+        },
+        {
+          "name": "kamino_scope_prices"
         },
         {
           "name": "collateral_mint"
@@ -937,6 +996,9 @@
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "kamino_program"
         }
       ],
       "args": [

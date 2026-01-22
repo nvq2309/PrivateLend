@@ -15,6 +15,12 @@ pub const PROTECTION_RESERVE_SEED: &[u8] = b"protection_reserve";
 pub const RECEIPT_MINT_SEED: &[u8] = b"receipt";
 #[constant]
 pub const BORROW_MINT_SEED: &[u8] = b"borrow";
+#[constant]
+pub const MERKLE_TREE_SEED: &[u8] = b"merkle_tree";
+#[constant]
+pub const NULLIFIER_SEED: &[u8] = b"nullifier";
+
+pub const MERKLE_TREE_DEPTH: usize = 8;
 
 // LTV constants (from main)
 pub const MAX_LTV_BPS: u64 = 7_500;

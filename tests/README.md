@@ -64,3 +64,4 @@ yarn test
 - **"Program not found"**: Run `anchor build && anchor deploy` first
 - **"Insufficient funds"**: Airdrop more SOL: `solana airdrop 10`
 - **"Account already exists"**: Reset validator: `solana-test-validator --reset`
+- **"Archive error: extra entry found: \"._genesis.bin\"" (macOS)**: Delete `.anchor/test-ledger` and rerun with `COPYFILE_DISABLE=1 anchor test`

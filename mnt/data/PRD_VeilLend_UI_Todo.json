@@ -275,6 +275,29 @@
       "passes": false
     },
     {
+      "id": "AT-MERKLE-01",
+      "category": "functional",
+      "description": "SECURE deposit appends commitment to on-chain Merkle tree",
+      "steps": [
+        "Initialize Merkle tree for the vault",
+        "Perform SECURE deposit",
+        "Fetch Merkle tree account and verify root updates",
+        "Verify leaf index increments"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-NULLIFIER-01",
+      "category": "functional",
+      "description": "Nullifier prevents double-spend of a note",
+      "steps": [
+        "Perform SECURE borrow with merkle proof",
+        "Attempt another SECURE action with the same nullifier",
+        "Verify transaction fails with NullifierAlreadySpent"
+      ],
+      "passes": false
+    },
+    {
       "id": "AT-SUPPLY-FAST-01",
       "category": "functional",
       "description": "Supply (FAST): routes directly to underlying lending adapter",

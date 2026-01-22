@@ -1,6 +1,12 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import {
+  PublicKey,
+  Keypair,
+  SystemProgram,
+  LAMPORTS_PER_SOL,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+} from "@solana/web3.js";
 import { 
   TOKEN_PROGRAM_ID, 
   createMint, 
@@ -12,13 +18,17 @@ import { expect } from "chai";
 import { x25519 } from '@arcium-hq/client';
 import { randomBytes } from 'crypto';
 
-import { Veillend } from "../target/types/veillend";
 
 describe("VeilLend PRD Acceptance Tests", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.Veillend as Program<Veillend>;
+  const program = anchor.workspace.Veillend as Program<any>;
+  const programAccounts = program.account as unknown as {
+    vault: { fetch: (pubkey: PublicKey) => Promise<any> };
+    protectionPool: { fetch: (pubkey: PublicKey) => Promise<any> };
+    userReceipt: { fetch: (pubkey: PublicKey) => Promise<any> };
+  };
   const authority = provider.wallet;
 
   // Privacy / Encryption Mocks
@@ -41,7 +51,6 @@ describe("VeilLend PRD Acceptance Tests", () => {
   let userCollateralAccountAddr: PublicKey;
   let userBorrowAccountAddr: PublicKey; // For receiving borrowed funds (conceptual)
   let userRepayAccountAddr: PublicKey; // Source for repaying
-  let vaultRepayAccountAddr: PublicKey; // Destination for repay (likely same as vault collateral or separate?)
 
   // Test User
   const user = Keypair.generate();
@@ -136,7 +145,6 @@ describe("VeilLend PRD Acceptance Tests", () => {
     // Let's guess it's `vaultCollateralAccount` for simplicity unless derived differently.
     // Wait, `repay.rs` doesn't derive it using seeds, just passes it.
     // If it's just passed, it must be the one holding assets for the vault.
-    vaultRepayAccountAddr = vaultCollateralAccount;
 
     console.log("Setup complete (PRD Scenarios)");
   });
@@ -202,7 +210,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
 
   describe("PRD SCENARIO 1: User Deposit & Receipt Creation", () => {
     it("Deposits collateral and mints private receipt", async () => {
-      const vaultBefore = await program.account.vault.fetch(vault);
+      const vaultBefore = await programAccounts.vault.fetch(vault);
       const encryptedBalance = getEncryptedBalance();
       const clientKey = getClientKey();
 
@@ -226,10 +234,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
         .rpc();
 
       // Verification (PRD: "User deposits collateral... VeilLend mints private receipt... increases aggregated position")
-      const receipt = await program.account.userReceipt.fetch(userReceipt);
+      const receipt = await programAccounts.userReceipt.fetch(userReceipt);
       expect(receipt.depositedCollateral.toNumber()).to.equal(DEPOSIT_AMOUNT.toNumber());
       
-      const vaultAfter = await program.account.vault.fetch(vault);
+      const vaultAfter = await programAccounts.vault.fetch(vault);
       expect(vaultAfter.totalCollateral.toNumber()).to.equal(
           vaultBefore.totalCollateral.toNumber() + DEPOSIT_AMOUNT.toNumber()
       );
@@ -244,6 +252,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
         // as the program currently mocks the CPI call.
         const kaminoMarket = Keypair.generate().publicKey;
         const kaminoObligation = Keypair.generate().publicKey;
+        const kaminoLendingMarketAuthority = Keypair.generate().publicKey;
+        const kaminoBorrowReserve = Keypair.generate().publicKey;
+        const kaminoBorrowReserveLiquidityMint = Keypair.generate().publicKey;
+        const kaminoReserveSourceLiquidity = Keypair.generate().publicKey;
+        const kaminoBorrowReserveLiquidityFeeReceiver = Keypair.generate().publicKey;
+        const kaminoReferrerTokenState = Keypair.generate().publicKey;
+        const kaminoPythOracle = Keypair.generate().publicKey;
+        const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
+        const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
+        const kaminoScopePrices = Keypair.generate().publicKey;
         const kaminoProgram = Keypair.generate().publicKey;
 
         await program.methods
@@ -255,6 +273,17 @@ describe("VeilLend PRD Acceptance Tests", () => {
                 userBorrowAccount: userBorrowAccountAddr, // passed but maybe unused in MVP logic
                 kaminoMarket,
                 kaminoObligation,
+                kaminoLendingMarketAuthority,
+                kaminoBorrowReserve,
+                kaminoBorrowReserveLiquidityMint,
+                kaminoReserveSourceLiquidity,
+                kaminoBorrowReserveLiquidityFeeReceiver,
+                kaminoReferrerTokenState,
+                kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
+                kaminoPythOracle,
+                kaminoSwitchboardPriceOracle,
+                kaminoSwitchboardTwapOracle,
+                kaminoScopePrices,
                 collateralMint,
                 borrowMint,
                 tokenProgram: TOKEN_PROGRAM_ID,
@@ -265,7 +294,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
 
         // Verification (PRD: "VeilLend borrows... transfers to user")
         // Currently verify internal accounting update
-        const receipt = await program.account.userReceipt.fetch(userReceipt);
+        const receipt = await programAccounts.userReceipt.fetch(userReceipt);
         expect(receipt.borrowedAmount.toNumber()).to.equal(BORROW_AMOUNT.toNumber());
     });
   });
@@ -295,10 +324,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
             .signers([user])
             .rpc();
 
-            const receipt = await program.account.userReceipt.fetch(userReceipt);
+            const receipt = await programAccounts.userReceipt.fetch(userReceipt);
             expect(receipt.protectionTier).to.equal(tier);
             
-            const pool = await program.account.protectionPool.fetch(protectionPool);
+            const pool = await programAccounts.protectionPool.fetch(protectionPool);
             expect(pool.totalSubscribers.toNumber()).to.be.greaterThan(0);
       });
   });
@@ -307,6 +336,17 @@ describe("VeilLend PRD Acceptance Tests", () => {
       it("User repays debt", async () => {
           const encryptedBalance = getEncryptedBalance();
           
+          const kaminoMarket = Keypair.generate().publicKey;
+          const kaminoObligation = Keypair.generate().publicKey;
+          const kaminoRepayReserve = Keypair.generate().publicKey;
+          const kaminoReserveLiquidityMint = Keypair.generate().publicKey;
+          const kaminoReserveDestinationLiquidity = Keypair.generate().publicKey;
+          const kaminoPythOracle = Keypair.generate().publicKey;
+          const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
+          const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
+          const kaminoScopePrices = Keypair.generate().publicKey;
+          const kaminoProgram = Keypair.generate().publicKey;
+
           await program.methods
             .repay(REPAY_AMOUNT, encryptedBalance)
             .accountsStrict({
@@ -314,15 +354,25 @@ describe("VeilLend PRD Acceptance Tests", () => {
                 vault,
                 userReceipt,
                 userRepayAccount: userRepayAccountAddr,
-                vaultRepayAccount: vaultRepayAccountAddr,
+                kaminoMarket,
+                kaminoObligation,
+                kaminoRepayReserve,
+                kaminoReserveLiquidityMint,
+                kaminoReserveDestinationLiquidity,
+                kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
+                kaminoPythOracle,
+                kaminoSwitchboardPriceOracle,
+                kaminoSwitchboardTwapOracle,
+                kaminoScopePrices,
                 collateralMint,
                 repayMint: borrowMint, // In repay.rs constraint: repay_mint == vault.borrow_mint
                 tokenProgram: TOKEN_PROGRAM_ID,
+                kaminoProgram,
             })
             .signers([user])
             .rpc();
 
-            const receipt = await program.account.userReceipt.fetch(userReceipt);
+            const receipt = await programAccounts.userReceipt.fetch(userReceipt);
             const expectedDebt = BORROW_AMOUNT.toNumber() - REPAY_AMOUNT.toNumber();
             expect(receipt.borrowedAmount.toNumber()).to.equal(expectedDebt);
       });
@@ -330,11 +380,22 @@ describe("VeilLend PRD Acceptance Tests", () => {
       // We need to fully repay before withdrawing in current logic?
       // withdraw.rs: require!(ctx.accounts.user_receipt.borrowed_amount == 0, VeilLendError::OutstandingDebt);
       it("User fully repays remaining debt", async () => {
-        const receipt = await program.account.userReceipt.fetch(userReceipt);
+        const receipt = await programAccounts.userReceipt.fetch(userReceipt);
         const remaining = receipt.borrowedAmount;
         const encryptedBalance = getEncryptedBalance();
 
         if (remaining.toNumber() > 0) {
+            const kaminoMarket = Keypair.generate().publicKey;
+            const kaminoObligation = Keypair.generate().publicKey;
+            const kaminoRepayReserve = Keypair.generate().publicKey;
+            const kaminoReserveLiquidityMint = Keypair.generate().publicKey;
+            const kaminoReserveDestinationLiquidity = Keypair.generate().publicKey;
+            const kaminoPythOracle = Keypair.generate().publicKey;
+            const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
+            const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
+            const kaminoScopePrices = Keypair.generate().publicKey;
+            const kaminoProgram = Keypair.generate().publicKey;
+
             await program.methods
             .repay(remaining, encryptedBalance)
             .accountsStrict({
@@ -342,16 +403,26 @@ describe("VeilLend PRD Acceptance Tests", () => {
                 vault,
                 userReceipt,
                 userRepayAccount: userRepayAccountAddr,
-                vaultRepayAccount: vaultRepayAccountAddr,
+                kaminoMarket,
+                kaminoObligation,
+                kaminoRepayReserve,
+                kaminoReserveLiquidityMint,
+                kaminoReserveDestinationLiquidity,
+                kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
+                kaminoPythOracle,
+                kaminoSwitchboardPriceOracle,
+                kaminoSwitchboardTwapOracle,
+                kaminoScopePrices,
                 collateralMint,
                 repayMint: borrowMint,
                 tokenProgram: TOKEN_PROGRAM_ID,
+                kaminoProgram,
             })
             .signers([user])
             .rpc();
         }
 
-        const receiptAfter = await program.account.userReceipt.fetch(userReceipt);
+        const receiptAfter = await programAccounts.userReceipt.fetch(userReceipt);
         expect(receiptAfter.borrowedAmount.toNumber()).to.equal(0);
       });
 
@@ -359,7 +430,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
           const encryptedBalance = getEncryptedBalance();
           
           // Must have 0 debt now
-          const receiptBefore = await program.account.userReceipt.fetch(userReceipt);
+        const receiptBefore = await programAccounts.userReceipt.fetch(userReceipt);
           const sharesToBurn = receiptBefore.shares; // Withdraw all for simplicity of calculating expected returns
           
           await program.methods
@@ -380,7 +451,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
             .rpc();
 
             // Verify receipt shares burned
-            const receiptAfter = await program.account.userReceipt.fetch(userReceipt);
+        const receiptAfter = await programAccounts.userReceipt.fetch(userReceipt);
             expect(receiptAfter.shares.toNumber()).to.equal(0);
             
             // Verify collateral returned (approximately DEPOSIT_AMOUNT, slightly less due to any fees/rounding if applicable, but here 1:1)

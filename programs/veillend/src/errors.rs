@@ -44,4 +44,14 @@ pub enum VeilLendError {
     NoDebt,
     #[msg("Protection already active")]
     ProtectionAlreadyActive,
+    #[msg("Merkle tree is full")]
+    MerkleTreeFull,
+    #[msg("Merkle proof verification failed")]
+    MerkleProofInvalid,
+    #[msg("Nullifier already spent")]
+    NullifierAlreadySpent,
+    #[msg("Invalid merkle path")]
+    InvalidMerklePath,
+    #[msg("Merkle tree depth mismatch")]
+    MerkleDepthMismatch,
 }

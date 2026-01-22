@@ -1,0 +1,48 @@
+use anchor_lang::prelude::*;
+use crate::constants::*;
+use crate::merkle::initialize_merkle_tree as init_tree;
+use crate::state::*;
+
+#[derive(Accounts)]
+pub struct InitializeMerkleTree<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        constraint = vault.authority == authority.key()
+    )]
+    pub vault: Box<Account<'info, Vault>>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + MerkleTree::INIT_SPACE,
+        seeds = [MERKLE_TREE_SEED, vault.key().as_ref()],
+        bump,
+    )]
+    pub merkle_tree: Box<Account<'info, MerkleTree>>,
+
+    pub system_program: Program<'info, System>,
+}
+
+pub fn initialize_merkle_tree(ctx: Context<InitializeMerkleTree>) -> Result<()> {
+    let tree = &mut ctx.accounts.merkle_tree;
+    tree.vault = ctx.accounts.vault.key();
+    tree.bump = ctx.bumps.merkle_tree;
+    init_tree(tree);
+
+    emit!(MerkleTreeInitializedEvent {
+        vault: tree.vault,
+        root: tree.root,
+        depth: tree.depth,
+    });
+
+    Ok(())
+}
+
+#[event]
+pub struct MerkleTreeInitializedEvent {
+    pub vault: Pubkey,
+    pub root: [u8; 32],
+    pub depth: u8,
+}

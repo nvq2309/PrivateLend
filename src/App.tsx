@@ -129,6 +129,7 @@ const App = () => {
     protectionPoolStats,
     programError,
     fastAdapter,
+    secureAdapter,
     subscribeProtection,
     refreshNote,
     clearNote,
@@ -240,18 +241,19 @@ const App = () => {
 
     try {
       let signature = '';
+      const adapter = mode === 'SECURE' ? secureAdapter : fastAdapter;
       switch (activeAction) {
         case 'SUPPLY':
-          signature = await fastAdapter.supply(lamports);
+          signature = await adapter.supply(lamports);
           break;
         case 'BORROW':
-          signature = await fastAdapter.borrow(lamports);
+          signature = await adapter.borrow(lamports);
           break;
         case 'REPAY':
-          signature = await fastAdapter.repay(lamports);
+          signature = await adapter.repay(lamports);
           break;
         case 'WITHDRAW':
-          signature = await fastAdapter.withdraw(lamports);
+          signature = await adapter.withdraw(lamports);
           break;
         default:
           break;
@@ -538,154 +540,222 @@ const App = () => {
                 </div>
 
                 {!note ? (
-                  <div className="glass rounded-3xl p-10 border-dashed border-2 border-white/10 space-y-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center">
-                        <span className="text-lg">!</span>
-                      </div>
-                      <div>
-                        <p className="text-slate-200 font-semibold">Note required</p>
-                        <p className="text-xs text-slate-300">
-                          Import an existing note or create an initial note to unlock your position.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-3">
-                        <p className="text-xs uppercase tracking-widest text-slate-300 font-bold">
-                          Import note
-                        </p>
-                        <input
-                          type="text"
-                          value={importNoteHash}
-                          onChange={(event) => setImportNoteHash(event.target.value)}
-                          placeholder="Note hash"
-                          className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 text-sm"
-                        />
-                        <input
-                          type="text"
-                          value={importLastTxnId}
-                          onChange={(event) => setImportLastTxnId(event.target.value)}
-                          placeholder="Last txn id (optional)"
-                          className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 text-sm"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleImportNote}
-                          className="w-full py-3 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20"
-                        >
-                          Save note
-                        </button>
+                  <div className="glass rounded-3xl overflow-hidden border-white/10 relative group">
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-cyan-500/5 opacity-50" />
+                    
+                    <div className="relative p-8 md:p-12 text-center space-y-8">
+                      <div className="space-y-4">
+                        <div className="w-20 h-20 mx-auto rounded-full bg-white/5 border border-white/10 flex items-center justify-center shadow-inner relative overflow-hidden">
+                          <div className="absolute inset-0 bg-emerald-500/10 blur-xl animate-pulse" />
+                          <svg className="w-8 h-8 text-emerald-400 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <h2 className="text-2xl font-bold text-white mb-2">Private Vault Access</h2>
+                          <p className="text-slate-400 max-w-md mx-auto">
+                            Your financial data is encrypted. Provide your unique note hash to unlock your position or initialize a new shielded identity.
+                          </p>
+                        </div>
                       </div>
 
-                      <div className="space-y-3">
-                        <p className="text-xs uppercase tracking-widest text-slate-300 font-bold">
-                          Create initial note
-                        </p>
-                        <button
-                          type="button"
-                          onClick={handleCreateInitialNote}
-                          className="w-full py-3 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40"
-                        >
-                          Generate note
-                        </button>
-                        {draftNote && (
-                          <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3 text-xs space-y-2">
-                            <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold">
-                              Draft note
-                            </p>
-                            <p className="font-mono break-all text-emerald-300">
-                              {draftNote.noteHash}
-                            </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl mx-auto">
+                        <div className="p-6 rounded-2xl bg-black/20 border border-white/5 hover:border-white/10 transition-colors text-left space-y-4">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="p-2 rounded-lg bg-white/5 text-slate-300">
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                              </svg>
+                            </div>
+                            <h3 className="font-bold text-slate-200">Import Existing Note</h3>
+                          </div>
+                          <div className="space-y-3">
+                            <input
+                              type="text"
+                              value={importNoteHash}
+                              onChange={(event) => setImportNoteHash(event.target.value)}
+                              placeholder="Paste note hash..."
+                              className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm focus:border-emerald-500/50 focus:outline-none transition-colors font-mono"
+                            />
+                            <input
+                              type="text"
+                              value={importLastTxnId}
+                              onChange={(event) => setImportLastTxnId(event.target.value)}
+                              placeholder="Last transaction ID (Optional)"
+                              className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm focus:border-emerald-500/50 focus:outline-none transition-colors font-mono"
+                            />
                             <button
                               type="button"
-                              onClick={handleSaveDraftNote}
-                              className="w-full py-2 rounded-lg text-xs font-bold bg-white/10 hover:bg-white/20"
+                              onClick={handleImportNote}
+                              className="w-full py-3 rounded-xl text-sm font-bold bg-white/10 hover:bg-white/20 text-white transition-all border border-white/5"
                             >
-                              Save to storage
+                              Unlock Vault
                             </button>
                           </div>
-                        )}
+                        </div>
+
+                        <div className="p-6 rounded-2xl bg-emerald-900/10 border border-emerald-500/20 hover:border-emerald-500/30 transition-colors text-left space-y-4 relative overflow-hidden">
+                          <div className="flex items-center gap-3 mb-2 relative z-10">
+                            <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-300">
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            </div>
+                            <h3 className="font-bold text-emerald-100">Initialize New Identity</h3>
+                          </div>
+                          
+                          {!draftNote ? (
+                            <div className="space-y-4 relative z-10">
+                              <p className="text-sm text-emerald-200/60 leading-relaxed">
+                                Generate a cryptographically secure note to start your private lending journey. This note is your only key.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={handleCreateInitialNote}
+                                className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-all shadow-lg shadow-emerald-900/20"
+                              >
+                                Generate Access Key
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="space-y-3 relative z-10">
+                              <div className="p-3 bg-black/40 rounded-xl border border-emerald-500/20">
+                                <p className="text-[10px] uppercase tracking-widest text-emerald-500/70 font-bold mb-2">Your New Note</p>
+                                <code className="text-xs font-mono text-emerald-300 break-all block leading-relaxed">
+                                  {draftNote.noteHash}
+                                </code>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleSaveDraftNote}
+                                className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-all shadow-lg shadow-emerald-900/20"
+                              >
+                                Confirm & Save
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="glass p-6 rounded-3xl border border-white/10 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black px-2 py-0.5 rounded bg-emerald-400 text-slate-900">
-                          POSITION
-                        </span>
+                  <div className="space-y-6">
+                    <div className="glass rounded-3xl border-white/10 overflow-hidden">
+                      <div className="px-6 py-4 border-b border-white/5 bg-white/[0.02] flex flex-col md:flex-row justify-between md:items-center gap-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="text-sm font-bold tracking-wide text-slate-200">VAULT UNLOCKED</span>
+                          <span className="text-xs font-mono text-slate-500 px-2 py-0.5 bg-white/5 rounded">
+                            {toShortHash(note.noteHash, 8)}
+                          </span>
+                        </div>
                         <button
                           type="button"
                           onClick={clearNote}
-                          className="text-[10px] uppercase tracking-widest text-slate-300 hover:text-white"
+                          className="text-xs font-bold text-slate-400 hover:text-white flex items-center gap-2 transition-colors"
                         >
-                          Clear note
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                          </svg>
+                          Lock Vault
                         </button>
                       </div>
-                      <div>
-                        <h3 className="text-xl font-bold mb-1">
-                          {formatAmount(myPosition?.deposit ?? 0, collateralDecimals)} {collateralSymbol}
-                        </h3>
-                        <p className="text-xs text-slate-300">Collateral deposited</p>
-                      </div>
-                      <div>
-                        <h3 className="text-xl font-bold text-red-300 mb-1">
-                          {formatAmount(myPosition?.borrow ?? 0, borrowDecimals)} {borrowSymbol}
-                        </h3>
-                        <p className="text-xs text-slate-300">Debt outstanding</p>
-                      </div>
-                      <div className="flex gap-2 pt-2">
-                        <button
-                          type="button"
-                          onClick={() => openAction('WITHDRAW', collateralSymbol)}
-                          className="flex-1 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/10"
-                        >
-                          Withdraw
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openAction('REPAY', borrowSymbol)}
-                          className="flex-1 py-2 rounded-xl text-xs font-bold bg-white/5 hover:bg-white/10 border border-white/10"
-                        >
-                          Repay
-                        </button>
-                      </div>
-                    </div>
 
-                    <div className="glass p-6 rounded-3xl border border-white/10 space-y-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold">
-                        Active note
-                      </p>
-                      <div className="bg-black/40 p-4 rounded-2xl border border-white/5">
-                        <p className="text-[10px] text-slate-300 font-bold mb-2 uppercase tracking-tighter">
-                          Note hash
-                        </p>
-                        <code className="text-[11px] block break-all font-mono text-emerald-300">
-                          {note.noteHash}
-                        </code>
-                      </div>
-                      <div className="text-xs text-slate-300 space-y-1">
-                        <div className="flex justify-between">
-                          <span>Last tx</span>
-                          <span className="text-slate-200">{toShortHash(note.lastTxnId, 12)}</span>
+                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-white/5">
+                        <div className="p-8 space-y-6 relative overflow-hidden group">
+                          <div className="absolute top-0 right-0 p-32 bg-emerald-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 group-hover:bg-emerald-500/10 transition-colors" />
+                          
+                          <div className="relative z-10">
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Collateral Assets</p>
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-4xl font-bold text-white">
+                                {formatAmount(myPosition?.deposit ?? 0, collateralDecimals)}
+                              </span>
+                              <span className="text-xl font-medium text-emerald-400">{collateralSymbol}</span>
+                            </div>
+                            <p className="text-sm text-slate-500 mt-1">
+                              Available to withdraw: {formatAmount(myPosition?.deposit ?? 0, collateralDecimals)} {collateralSymbol}
+                            </p>
+                          </div>
+
+                          <div className="flex gap-3 relative z-10 pt-4">
+                            <button
+                              type="button"
+                              onClick={() => openAction('SUPPLY', collateralSymbol)}
+                              className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 text-slate-950 font-bold text-sm hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                              </svg>
+                              Deposit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openAction('WITHDRAW', collateralSymbol)}
+                              className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" transform="rotate(45 12 12)" />
+                              </svg>
+                              Withdraw
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span>Updated</span>
-                          <span className="text-slate-200">
-                            {new Date(note.updatedAt).toLocaleString()}
+
+                        <div className="p-8 space-y-6 relative overflow-hidden group">
+                          <div className="absolute top-0 right-0 p-32 bg-red-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 group-hover:bg-red-500/10 transition-colors" />
+
+                          <div className="relative z-10">
+                            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Outstanding Debt</p>
+                            <div className="flex items-baseline gap-2">
+                              <span className="text-4xl font-bold text-white">
+                                {formatAmount(myPosition?.borrow ?? 0, borrowDecimals)}
+                              </span>
+                              <span className="text-xl font-medium text-red-300">{borrowSymbol}</span>
+                            </div>
+                            <p className="text-sm text-slate-500 mt-1">
+                              Interest accruing at {(MARKET_BASE[borrowSymbol as keyof typeof MARKET_BASE]?.borrowApy ?? 0).toFixed(1)}% APY
+                            </p>
+                          </div>
+
+                          <div className="flex gap-3 relative z-10 pt-4">
+                            <button
+                              type="button"
+                              onClick={() => openAction('BORROW', borrowSymbol)}
+                              className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                              </svg>
+                              Borrow
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openAction('REPAY', borrowSymbol)}
+                              className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              Repay
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="px-6 py-4 bg-black/20 border-t border-white/5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-[10px] text-slate-500 font-mono uppercase tracking-wider">
+                        <div className="flex items-center gap-4">
+                          <span>Updated: {new Date(note.updatedAt).toLocaleString()}</span>
+                          <span className="hidden md:inline text-white/10">|</span>
+                          <span>Last Tx: {toShortHash(note.lastTxnId, 16)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${healthFactor > 1.2 ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                          <span className={healthFactor > 1.2 ? 'text-emerald-500' : 'text-red-500'}>
+                            Health Factor: {healthFactor.toFixed(2)}
                           </span>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => openAction('SUPPLY', collateralSymbol)}
-                        className="w-full py-3 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40"
-                      >
-                        Add collateral
-                      </button>
                     </div>
                   </div>
                 )}

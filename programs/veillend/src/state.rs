@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-
+use crate::constants::MERKLE_TREE_DEPTH;
 #[account]
 pub struct Vault {
     pub authority: Pubkey,
@@ -58,4 +58,31 @@ pub struct ProtectionPool {
 
 impl ProtectionPool {
     pub const LEN: usize = 8 + 32 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 16;
+}
+
+#[account]
+pub struct MerkleTree {
+    pub vault: Pubkey,
+    pub depth: u8,
+    pub root: [u8; 32],
+    pub next_index: u32,
+    pub filled_subtrees: [[u8; 32]; MERKLE_TREE_DEPTH],
+    pub bump: u8,
+    pub reserved: [u8; 32],
+}
+
+impl MerkleTree {
+    pub const INIT_SPACE: usize = 32 + 1 + 32 + 4 + (32 * MERKLE_TREE_DEPTH) + 1 + 32;
+}
+
+#[account]
+pub struct Nullifier {
+    pub vault: Pubkey,
+    pub spent: bool,
+    pub bump: u8,
+    pub reserved: [u8; 30],
+}
+
+impl Nullifier {
+    pub const INIT_SPACE: usize = 32 + 1 + 1 + 30;
 }

@@ -191,6 +191,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
             // as the program currently mocks the CPI call.
             const kaminoMarket = web3_js_1.Keypair.generate().publicKey;
             const kaminoObligation = web3_js_1.Keypair.generate().publicKey;
+            const kaminoLendingMarketAuthority = web3_js_1.Keypair.generate().publicKey;
+            const kaminoBorrowReserve = web3_js_1.Keypair.generate().publicKey;
+            const kaminoBorrowReserveLiquidityMint = web3_js_1.Keypair.generate().publicKey;
+            const kaminoReserveSourceLiquidity = web3_js_1.Keypair.generate().publicKey;
+            const kaminoBorrowReserveLiquidityFeeReceiver = web3_js_1.Keypair.generate().publicKey;
+            const kaminoReferrerTokenState = web3_js_1.Keypair.generate().publicKey;
+            const kaminoPythOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoSwitchboardPriceOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoSwitchboardTwapOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoScopePrices = web3_js_1.Keypair.generate().publicKey;
             const kaminoProgram = web3_js_1.Keypair.generate().publicKey;
             yield program.methods
                 .borrow(BORROW_AMOUNT, encryptedBalance)
@@ -201,6 +211,17 @@ describe("VeilLend PRD Acceptance Tests", () => {
                 userBorrowAccount: userBorrowAccountAddr, // passed but maybe unused in MVP logic
                 kaminoMarket,
                 kaminoObligation,
+                kaminoLendingMarketAuthority,
+                kaminoBorrowReserve,
+                kaminoBorrowReserveLiquidityMint,
+                kaminoReserveSourceLiquidity,
+                kaminoBorrowReserveLiquidityFeeReceiver,
+                kaminoReferrerTokenState,
+                kaminoInstructionSysvarAccount: web3_js_1.SYSVAR_INSTRUCTIONS_PUBKEY,
+                kaminoPythOracle,
+                kaminoSwitchboardPriceOracle,
+                kaminoSwitchboardTwapOracle,
+                kaminoScopePrices,
                 collateralMint,
                 borrowMint,
                 tokenProgram: spl_token_1.TOKEN_PROGRAM_ID,
@@ -245,6 +266,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
     describe("PRD SCENARIO 3: User Repay & Withdrawal", () => {
         it("User repays debt", () => __awaiter(void 0, void 0, void 0, function* () {
             const encryptedBalance = getEncryptedBalance();
+            const kaminoMarket = web3_js_1.Keypair.generate().publicKey;
+            const kaminoObligation = web3_js_1.Keypair.generate().publicKey;
+            const kaminoRepayReserve = web3_js_1.Keypair.generate().publicKey;
+            const kaminoReserveLiquidityMint = web3_js_1.Keypair.generate().publicKey;
+            const kaminoReserveDestinationLiquidity = web3_js_1.Keypair.generate().publicKey;
+            const kaminoPythOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoSwitchboardPriceOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoSwitchboardTwapOracle = web3_js_1.Keypair.generate().publicKey;
+            const kaminoScopePrices = web3_js_1.Keypair.generate().publicKey;
+            const kaminoProgram = web3_js_1.Keypair.generate().publicKey;
             yield program.methods
                 .repay(REPAY_AMOUNT, encryptedBalance)
                 .accounts({
@@ -252,10 +283,20 @@ describe("VeilLend PRD Acceptance Tests", () => {
                 vault,
                 userReceipt,
                 userRepayAccount: userRepayAccountAddr,
-                vaultRepayAccount: vaultRepayAccountAddr,
+                kaminoMarket,
+                kaminoObligation,
+                kaminoRepayReserve,
+                kaminoReserveLiquidityMint,
+                kaminoReserveDestinationLiquidity,
+                kaminoInstructionSysvarAccount: web3_js_1.SYSVAR_INSTRUCTIONS_PUBKEY,
+                kaminoPythOracle,
+                kaminoSwitchboardPriceOracle,
+                kaminoSwitchboardTwapOracle,
+                kaminoScopePrices,
                 collateralMint,
                 repayMint: borrowMint, // In repay.rs constraint: repay_mint == vault.borrow_mint
                 tokenProgram: spl_token_1.TOKEN_PROGRAM_ID,
+                kaminoProgram,
             })
                 .signers([user])
                 .rpc();
@@ -270,6 +311,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
             const remaining = receipt.borrowedAmount;
             const encryptedBalance = getEncryptedBalance();
             if (remaining.toNumber() > 0) {
+                const kaminoMarket = web3_js_1.Keypair.generate().publicKey;
+                const kaminoObligation = web3_js_1.Keypair.generate().publicKey;
+                const kaminoRepayReserve = web3_js_1.Keypair.generate().publicKey;
+                const kaminoReserveLiquidityMint = web3_js_1.Keypair.generate().publicKey;
+                const kaminoReserveDestinationLiquidity = web3_js_1.Keypair.generate().publicKey;
+                const kaminoPythOracle = web3_js_1.Keypair.generate().publicKey;
+                const kaminoSwitchboardPriceOracle = web3_js_1.Keypair.generate().publicKey;
+                const kaminoSwitchboardTwapOracle = web3_js_1.Keypair.generate().publicKey;
+                const kaminoScopePrices = web3_js_1.Keypair.generate().publicKey;
+                const kaminoProgram = web3_js_1.Keypair.generate().publicKey;
                 yield program.methods
                     .repay(remaining, encryptedBalance)
                     .accounts({
@@ -277,10 +328,20 @@ describe("VeilLend PRD Acceptance Tests", () => {
                     vault,
                     userReceipt,
                     userRepayAccount: userRepayAccountAddr,
-                    vaultRepayAccount: vaultRepayAccountAddr,
+                    kaminoMarket,
+                    kaminoObligation,
+                    kaminoRepayReserve,
+                    kaminoReserveLiquidityMint,
+                    kaminoReserveDestinationLiquidity,
+                    kaminoInstructionSysvarAccount: web3_js_1.SYSVAR_INSTRUCTIONS_PUBKEY,
+                    kaminoPythOracle,
+                    kaminoSwitchboardPriceOracle,
+                    kaminoSwitchboardTwapOracle,
+                    kaminoScopePrices,
                     collateralMint,
                     repayMint: borrowMint,
                     tokenProgram: spl_token_1.TOKEN_PROGRAM_ID,
+                    kaminoProgram,
                 })
                     .signers([user])
                     .rpc();

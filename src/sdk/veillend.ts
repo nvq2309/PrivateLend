@@ -7,13 +7,11 @@ import {
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 
-import { Veillend } from '../../target/types/veillend';
-
 // const VAULT_SEED = Buffer.from('vault');
 const USER_RECEIPT_SEED = Buffer.from('user_receipt');
 const VAULT_COLLATERAL_SEED = Buffer.from('vault_collateral');
 
-type CiphertextBundle = {
+export type CiphertextBundle = {
   ciphertext: Uint8Array[];
   nonce: Uint8Array;
 };
@@ -29,21 +27,54 @@ export interface ArciumEncryptionClient {
 }
 
 export interface VeilLendSDKConfig {
-  program: Program<Veillend>;
+  program: Program<any>;
   arcium: ArciumEncryptionClient;
   kaminoProgramId: PublicKey;
   kaminoMarket: PublicKey;
   kaminoObligation: PublicKey;
-  vaultRepayAccount: PublicKey;
+  kaminoLendingMarketAuthority: PublicKey;
+  kaminoBorrowReserve: PublicKey;
+  kaminoBorrowReserveLiquidityMint: PublicKey;
+  kaminoReserveSourceLiquidity: PublicKey;
+  kaminoBorrowReserveLiquidityFeeReceiver: PublicKey;
+  kaminoReferrerTokenState: PublicKey;
+  kaminoInstructionSysvarAccount: PublicKey;
+  kaminoPythOracle: PublicKey;
+  kaminoSwitchboardPriceOracle: PublicKey;
+  kaminoSwitchboardTwapOracle: PublicKey;
+  kaminoScopePrices: PublicKey;
+  kaminoRepayReserve: PublicKey;
+  kaminoReserveLiquidityMint: PublicKey;
+  kaminoReserveDestinationLiquidity: PublicKey;
 }
 
 export class VeilLendSDK {
-  private readonly program: Program<Veillend>;
+  private readonly program: Program<any>;
   private readonly arcium: ArciumEncryptionClient;
   private readonly kaminoProgramId: PublicKey;
   private readonly kaminoMarket: PublicKey;
   private readonly kaminoObligation: PublicKey;
-  private readonly vaultRepayAccount: PublicKey;
+  private readonly kaminoLendingMarketAuthority: PublicKey;
+  private readonly kaminoBorrowReserve: PublicKey;
+  private readonly kaminoBorrowReserveLiquidityMint: PublicKey;
+  private readonly kaminoReserveSourceLiquidity: PublicKey;
+  private readonly kaminoBorrowReserveLiquidityFeeReceiver: PublicKey;
+  private readonly kaminoReferrerTokenState: PublicKey;
+  private readonly kaminoInstructionSysvarAccount: PublicKey;
+  private readonly kaminoPythOracle: PublicKey;
+  private readonly kaminoSwitchboardPriceOracle: PublicKey;
+  private readonly kaminoSwitchboardTwapOracle: PublicKey;
+  private readonly kaminoScopePrices: PublicKey;
+  private readonly kaminoRepayReserve: PublicKey;
+  private readonly kaminoReserveLiquidityMint: PublicKey;
+  private readonly kaminoReserveDestinationLiquidity: PublicKey;
+
+  private getAccounts() {
+    return this.program.account as unknown as {
+      vault: { fetch: (pubkey: PublicKey) => Promise<any> };
+      userReceipt: { fetch: (pubkey: PublicKey) => Promise<any> };
+    };
+  }
 
   constructor(config: VeilLendSDKConfig) {
     this.program = config.program;
@@ -51,7 +82,20 @@ export class VeilLendSDK {
     this.kaminoProgramId = config.kaminoProgramId;
     this.kaminoMarket = config.kaminoMarket;
     this.kaminoObligation = config.kaminoObligation;
-    this.vaultRepayAccount = config.vaultRepayAccount;
+    this.kaminoLendingMarketAuthority = config.kaminoLendingMarketAuthority;
+    this.kaminoBorrowReserve = config.kaminoBorrowReserve;
+    this.kaminoBorrowReserveLiquidityMint = config.kaminoBorrowReserveLiquidityMint;
+    this.kaminoReserveSourceLiquidity = config.kaminoReserveSourceLiquidity;
+    this.kaminoBorrowReserveLiquidityFeeReceiver = config.kaminoBorrowReserveLiquidityFeeReceiver;
+    this.kaminoReferrerTokenState = config.kaminoReferrerTokenState;
+    this.kaminoInstructionSysvarAccount = config.kaminoInstructionSysvarAccount;
+    this.kaminoPythOracle = config.kaminoPythOracle;
+    this.kaminoSwitchboardPriceOracle = config.kaminoSwitchboardPriceOracle;
+    this.kaminoSwitchboardTwapOracle = config.kaminoSwitchboardTwapOracle;
+    this.kaminoScopePrices = config.kaminoScopePrices;
+    this.kaminoRepayReserve = config.kaminoRepayReserve;
+    this.kaminoReserveLiquidityMint = config.kaminoReserveLiquidityMint;
+    this.kaminoReserveDestinationLiquidity = config.kaminoReserveDestinationLiquidity;
   }
 
   async deposit(
@@ -59,7 +103,8 @@ export class VeilLendSDK {
     vaultAddress: PublicKey,
     amount: number,
   ): Promise<string> {
-    const vaultAccount = await this.program.account.vault.fetch(vaultAddress);
+    const accounts = this.getAccounts();
+    const vaultAccount = await accounts.vault.fetch(vaultAddress);
     const receiptMint = vaultAccount.receiptMint as PublicKey;
     const collateralMint = vaultAccount.collateralMint as PublicKey;
 
@@ -103,7 +148,8 @@ export class VeilLendSDK {
     vaultAddress: PublicKey,
     shares: number,
   ): Promise<string> {
-    const vaultAccount = await this.program.account.vault.fetch(vaultAddress);
+    const accounts = this.getAccounts();
+    const vaultAccount = await accounts.vault.fetch(vaultAddress);
     const receiptMint = vaultAccount.receiptMint as PublicKey;
     const collateralMint = vaultAccount.collateralMint as PublicKey;
 
@@ -152,7 +198,8 @@ export class VeilLendSDK {
     vaultAddress: PublicKey,
     amount: number,
   ): Promise<string> {
-    const vaultAccount = await this.program.account.vault.fetch(vaultAddress);
+    const accounts = this.getAccounts();
+    const vaultAccount = await accounts.vault.fetch(vaultAddress);
     const borrowMint = vaultAccount.borrowMint as PublicKey;
     const collateralMint = vaultAccount.collateralMint as PublicKey;
 
@@ -175,6 +222,17 @@ export class VeilLendSDK {
         userBorrowAccount: userBorrowAta,
         kaminoMarket: this.kaminoMarket,
         kaminoObligation: this.kaminoObligation,
+        kaminoLendingMarketAuthority: this.kaminoLendingMarketAuthority,
+        kaminoBorrowReserve: this.kaminoBorrowReserve,
+        kaminoBorrowReserveLiquidityMint: this.kaminoBorrowReserveLiquidityMint,
+        kaminoReserveSourceLiquidity: this.kaminoReserveSourceLiquidity,
+        kaminoBorrowReserveLiquidityFeeReceiver: this.kaminoBorrowReserveLiquidityFeeReceiver,
+        kaminoReferrerTokenState: this.kaminoReferrerTokenState,
+        kaminoInstructionSysvarAccount: this.kaminoInstructionSysvarAccount,
+        kaminoPythOracle: this.kaminoPythOracle,
+        kaminoSwitchboardPriceOracle: this.kaminoSwitchboardPriceOracle,
+        kaminoSwitchboardTwapOracle: this.kaminoSwitchboardTwapOracle,
+        kaminoScopePrices: this.kaminoScopePrices,
         collateralMint,
         borrowMint,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -190,7 +248,8 @@ export class VeilLendSDK {
     vaultAddress: PublicKey,
     amount: number,
   ): Promise<string> {
-    const vaultAccount = await this.program.account.vault.fetch(vaultAddress);
+    const accounts = this.getAccounts();
+    const vaultAccount = await accounts.vault.fetch(vaultAddress);
     const borrowMint = vaultAccount.borrowMint as PublicKey;
     const collateralMint = vaultAccount.collateralMint as PublicKey;
 
@@ -217,10 +276,20 @@ export class VeilLendSDK {
         vault: vaultAddress,
         userReceipt: userReceiptPda,
         userRepayAccount: userRepayAta,
-        vaultRepayAccount: this.vaultRepayAccount,
+        kaminoMarket: this.kaminoMarket,
+        kaminoObligation: this.kaminoObligation,
+        kaminoRepayReserve: this.kaminoRepayReserve,
+        kaminoReserveLiquidityMint: this.kaminoReserveLiquidityMint,
+        kaminoReserveDestinationLiquidity: this.kaminoReserveDestinationLiquidity,
+        kaminoInstructionSysvarAccount: this.kaminoInstructionSysvarAccount,
+        kaminoPythOracle: this.kaminoPythOracle,
+        kaminoSwitchboardPriceOracle: this.kaminoSwitchboardPriceOracle,
+        kaminoSwitchboardTwapOracle: this.kaminoSwitchboardTwapOracle,
+        kaminoScopePrices: this.kaminoScopePrices,
         collateralMint,
         repayMint: borrowMint,
         tokenProgram: TOKEN_PROGRAM_ID,
+        kaminoProgram: this.kaminoProgramId,
       })
       .transaction();
 
@@ -232,7 +301,8 @@ export class VeilLendSDK {
     vaultAddress: PublicKey,
   ): Promise<{ deposit: bigint; borrow: bigint; shares: bigint }> {
     const [userReceiptPda] = this.deriveUserReceiptPda(vaultAddress, userAddress);
-    const account = await this.program.account.userReceipt.fetch(userReceiptPda);
+    const accounts = this.getAccounts();
+    const account = await accounts.userReceipt.fetch(userReceiptPda);
 
     const encryptedBalance = new Uint8Array(account.encryptedBalance as number[]);
     const plaintext = this.arcium.decryptPosition(encryptedBalance);
@@ -263,8 +333,9 @@ export class VeilLendSDK {
     user: PublicKey,
   ): Promise<{ deposit: bigint; borrow: bigint; shares: bigint }> {
     const [userReceiptPda] = this.deriveUserReceiptPda(vault, user);
+    const accounts = this.getAccounts();
     try {
-      const receipt = await this.program.account.userReceipt.fetch(userReceiptPda);
+      const receipt = await accounts.userReceipt.fetch(userReceiptPda);
       return {
         deposit: BigInt(receipt.depositedCollateral.toString()),
         borrow: BigInt(receipt.borrowedAmount.toString()),

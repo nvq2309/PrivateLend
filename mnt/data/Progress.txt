@@ -119,6 +119,51 @@ Learnings:
 - 
 
 ---
+Step 11/12 — Automated acceptance tests (Privacy SDK unit tests) (Execution Log)
+What changed:
+- tests/privacy_phase.ts: added unit tests for note seed/rotation, commitment notes, proof generation/nullifiers, and stealth address flows.
+Commands run + outputs:
+- anchor test -- --grep "Privacy Phase - SDK" -> failed (anchor CLI treated --grep as cargo-build-sbf arg).
+- npx ts-mocha -p tsconfig.tests.json tests/privacy_phase.ts -> passed (9 tests).
+What passed/failed:
+- Privacy SDK unit tests: passed.
+- Full anchor test suite: not run.
+Key learnings / gotchas:
+- Use ts-mocha directly for SDK-only tests to avoid anchor CLI arg parsing.
+Next step:
+- Step 9: Portfolio page note requirement + positions view (UI flow).
+
+---
+Step 9/12 — Portfolio page (Execution Log)
+What changed:
+- src/App.tsx: refreshed Portfolio note gate with a secure "vault access" panel and consolidated the unlocked position dashboard with inline actions and note metadata.
+Commands run + outputs:
+- npm run build -> success (Vite build; chunk size warnings only).
+What passed/failed:
+- Build: passed.
+- Acceptance tests: not run (AT-PORTFOLIO-01 still pending manual UI verification).
+Key learnings / gotchas:
+- None.
+Next step:
+- Manually verify the Portfolio gating flow and update AT-PORTFOLIO-01 when confirmed.
+
+---
+UI Transaction Feedback + Vault Seed CTA (Execution Log)
+What changed:
+- src/hooks/useVeilLend.ts: switched @coral-xyz/borsh import to namespace form to fix borsh.struct undefined at runtime.
+- src/App.tsx: close action modal on success, show success pop-up with proof/note + Save-to-storage, add vault seed CTA (1,000 USDC), and label wallet SOL/USDC balances explicitly.
+Commands run + outputs:
+- npm run build -> success (Vite build completed; chunk size warnings only).
+What passed/failed:
+- Build: passed.
+- Acceptance tests: not run.
+Key learnings / gotchas:
+- @coral-xyz/borsh requires namespace import in the browser bundle.
+- Vault seed CTA assumes vault initialized and collateral mint is USDC; wallet needs >= 1,000 USDC.
+Next step:
+- Verify localnet UI shows SOL/USDC balances, run the seed flow to confirm vault shows 1,000 USDC, then update acceptance tests if verified.
+
+---
 Step 1/12 — Contract & environment variables (Execution Log)
 What changed:
 - .env.example: added CHAIN/DEPLOYER/PUBLIC_WALLET and VITE_* program/cluster variables.
@@ -490,3 +535,55 @@ Key learnings / gotchas:
 - Clearing Vite prebundle cache may be needed after dependency changes.
 Next step:
 - Restart Vite dev server and hard-refresh the UI to confirm the IdlCoder/BorshAccountsCoder error is gone; if not, capture the new stack trace.
+
+---
+Internal demo borrow/repay fallback (Execution Log)
+What changed:
+- programs/veillend/src/instructions/borrow.rs: mint borrow tokens to the user when Kamino is not configured and track vault.total_borrowed.
+- programs/veillend/src/instructions/repay.rs: burn borrow tokens when Kamino is not configured and decrement vault.total_borrowed.
+Commands run + outputs:
+- anchor build -> success (warnings about non-root profiles).
+What passed/failed:
+- Build: passed.
+- Acceptance tests: not run.
+Key learnings / gotchas:
+- Without Kamino addresses, borrow/repay now use vault-owned mint/burn for the demo path.
+Next step:
+- Run localnet bootstrap + UI borrow/repay to validate the internal demo flow and update acceptance tests.
+
+---
+Borrow UI failure fix (Execution Log)
+What changed:
+- programs/veillend/src/instructions/borrow.rs: marked borrow_mint writable for demo mint path.
+- programs/veillend/src/instructions/repay.rs: marked repay_mint writable for demo burn path.
+- src/hooks/useVeilLend.ts: set borrow/repay mint accounts writable in client instructions.
+Commands run + outputs:
+- anchor build -> success (warnings about non-root profiles).
+What passed/failed:
+- Build: passed.
+- Acceptance tests: not run.
+Key learnings / gotchas:
+- Mint/burn CPIs require the mint account to be writable on both client and program.
+Next step:
+- Re-run Borrow/Repay in the UI and confirm StandardWalletAdapter no longer throws for demo path.
+
+---
+Secure Merkle + Nullifier wiring (Execution Log)
+What changed:
+- programs/veillend/src/merkle.rs: switched to solana-sha256-hasher::hashv import.
+- programs/veillend/src/instructions/borrow_secure.rs and repay_secure.rs: added system_program account.
+- src/hooks/useVeilLend.ts: added SystemProgram account to borrow_secure/repay_secure instruction keys.
+- tests/veillend.ts: added systemProgram to borrow_secure and repay_secure account sets.
+Commands run + outputs:
+- anchor build -> success (warnings about non-root profiles).
+- anchor test -> failed (validator genesis archive error: "._genesis.bin"); retry with COPYFILE_DISABLE=1 anchor test -> failed (tests/prd_scenarios.ts: anchor.BN is not a constructor).
+- npm run lint -> failed (pre-existing lint errors in hooks/sdk/tests).
+- npm run build -> success (chunk size warnings only).
+What passed/failed:
+- Build: passed.
+- Anchor tests: failed (validator archive issue + anchor.BN test failure).
+- Lint: failed (pre-existing errors).
+Key learnings / gotchas:
+- On macOS, anchor test can fail on genesis archive; delete .anchor/test-ledger and use COPYFILE_DISABLE=1.
+Next step:
+- Fix or skip tests/prd_scenarios.ts anchor.BN usage, then re-run anchor test.
