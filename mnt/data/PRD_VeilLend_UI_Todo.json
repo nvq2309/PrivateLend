@@ -272,7 +272,7 @@
         "Assert only one note is marked active in LOCAL_STORAGE for wallet A",
         "Assert note seed inputs reflect (timestamp, walletAddress=A, lastTxnId=txid from previous action)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-MERKLE-01",
@@ -284,7 +284,7 @@
         "Fetch Merkle tree account and verify root updates",
         "Verify leaf index increments"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-NULLIFIER-01",
@@ -295,7 +295,7 @@
         "Attempt another SECURE action with the same nullifier",
         "Verify transaction fails with NullifierAlreadySpent"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-SUPPLY-FAST-01",
@@ -309,7 +309,7 @@
         "Verify tx signature exists and adapter.supply called",
         "Verify no note/proof UI is required"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-SUPPLY-SECURE-01",
@@ -325,7 +325,7 @@
         "Click 'Save to storage'",
         "Verify note is stored in LOCAL_STORAGE under wallet-specific key"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-ACTIONS-PARITY-01",
@@ -337,7 +337,7 @@
         "Repeat the above for Repay",
         "Repeat the above for Withdraw"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-PORTFOLIO-01",
@@ -350,7 +350,7 @@
         "Create initial note",
         "Verify positions view becomes accessible"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "AT-CORE-LEND-01",

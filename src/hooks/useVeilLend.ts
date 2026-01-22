@@ -28,6 +28,7 @@ import {
   USDC_MINT,
   WSOL_MINT,
 } from '../config/solana';
+import { isE2e } from '../config/e2e';
 import {
   NoteRecord,
   clearNoteRecord,
@@ -256,6 +257,7 @@ const protectionPoolLayout = borsh.struct([
 
 const MERKLE_TREE_SEED = 'merkle_tree';
 const MERKLE_TREE_DEPTH = 8;
+const E2E_TEST_MODE = isE2e();
 
 const merkleTreeLayout = borsh.struct([
   borsh.publicKey('vault'),
@@ -275,6 +277,8 @@ const toNumber = (value: BN | number | bigint | null | undefined) => {
 };
 
 const randomBytes32 = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
+const buildE2eSignature = () =>
+  `e2e_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`;
 
 const deriveVaultPda = (programId: PublicKey, collateralMint: PublicKey) =>
   PublicKey.findProgramAddressSync(
@@ -320,6 +324,8 @@ export const useVeilLend = (mint?: PublicKey) => {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { publicKey } = wallet;
+  const e2eWalletAddress = E2E_TEST_MODE ? 'e2e-wallet' : null;
+  const walletAddress = publicKey?.toBase58() ?? e2eWalletAddress;
 
   const collateralMint = mint ?? DEFAULT_COLLATERAL_MINT;
   const programIdBase58 = PROGRAM_ID_STRINGS[SOLANA_CLUSTER];
@@ -407,14 +413,14 @@ export const useVeilLend = (mint?: PublicKey) => {
   }, [publicKey]);
 
   const refreshNote = useCallback(() => {
-    if (!publicKey) {
+    if (!walletAddress) {
       setNote(null);
       setPrivacyNotes([]);
       return;
     }
-    setNote(loadNoteRecord(publicKey.toBase58()));
-    setPrivacyNotes(getUnspentNotes(publicKey.toBase58()));
-  }, [publicKey]);
+    setNote(loadNoteRecord(walletAddress));
+    setPrivacyNotes(getUnspentNotes(walletAddress));
+  }, [walletAddress]);
 
   const buildMerkleLeaves = useCallback((walletAddress: string, vaultAddress: string) => {
     const notes = loadPrivacyNotes(walletAddress).filter((note) => note.vaultAddress === vaultAddress);
@@ -620,33 +626,33 @@ export const useVeilLend = (mint?: PublicKey) => {
   }, [refresh]);
 
   const createInitialNote = useCallback(async () => {
-    if (!publicKey) {
+    if (!walletAddress) {
       throw new Error('Wallet not connected');
     }
-    const record = await createInitialNoteRecord(publicKey.toBase58());
+    const record = await createInitialNoteRecord(walletAddress);
     saveNoteRecord(record);
     setNote(record);
     return record;
-  }, [publicKey]);
+  }, [walletAddress]);
 
   const rotateNote = useCallback(
     async (lastTxnId: string) => {
-      if (!publicKey) {
+      if (!walletAddress) {
         throw new Error('Wallet not connected');
       }
-      const record = await rotateNoteRecord(publicKey.toBase58(), lastTxnId, note ?? undefined);
+      const record = await rotateNoteRecord(walletAddress, lastTxnId, note ?? undefined);
       saveNoteRecord(record);
       setNote(record);
       return record;
     },
-    [note, publicKey],
+    [note, walletAddress],
   );
 
   const clearNote = useCallback(() => {
-    if (!publicKey) return;
-    clearNoteRecord(publicKey.toBase58());
+    if (!walletAddress) return;
+    clearNoteRecord(walletAddress);
     setNote(null);
-  }, [publicKey]);
+  }, [walletAddress]);
 
   const buildAtaInstruction = useCallback(
     async (mintAddress: PublicKey, owner: PublicKey) => {
@@ -1259,7 +1265,11 @@ export const useVeilLend = (mint?: PublicKey) => {
             { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
             { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
             { pubkey: PublicKey.findProgramAddressSync(
-                [Buffer.from('nullifier'), fromHex(activeNote.nullifier)],
+                [
+                  Buffer.from('nullifier'),
+                  vaultAddress.toBytes(),
+                  fromHex(activeNote.nullifier),
+                ],
                 programId,
               )[0], isSigner: false, isWritable: true },
             { pubkey: collateral, isSigner: false, isWritable: false },
@@ -1444,17 +1454,22 @@ export const useVeilLend = (mint?: PublicKey) => {
           { pubkey: kaminoSwitchboardTwapOracle, isSigner: false, isWritable: false },
           { pubkey: kaminoScopePrices, isSigner: false, isWritable: false },
           { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
-          {
-            pubkey: PublicKey.findProgramAddressSync(
-              [Buffer.from('nullifier'), fromHex(activeNote.nullifier)],
-              programId,
-            )[0],
-            isSigner: false,
-            isWritable: true,
-          },
+            {
+              pubkey: PublicKey.findProgramAddressSync(
+                [
+                  Buffer.from('nullifier'),
+                  vaultAddress.toBytes(),
+                  fromHex(activeNote.nullifier),
+                ],
+                programId,
+              )[0],
+              isSigner: false,
+              isWritable: true,
+            },
           { pubkey: collateral, isSigner: false, isWritable: false },
           { pubkey: borrowMint, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: kaminoProgram, isSigner: false, isWritable: false },
         ],
         data: encodeInstruction('borrow_secure', {
@@ -1595,17 +1610,22 @@ export const useVeilLend = (mint?: PublicKey) => {
           { pubkey: kaminoSwitchboardTwapOracle, isSigner: false, isWritable: false },
           { pubkey: kaminoScopePrices, isSigner: false, isWritable: false },
           { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
-          {
-            pubkey: PublicKey.findProgramAddressSync(
-              [Buffer.from('nullifier'), fromHex(activeNote.nullifier)],
-              programId,
-            )[0],
-            isSigner: false,
-            isWritable: true,
-          },
+            {
+              pubkey: PublicKey.findProgramAddressSync(
+                [
+                  Buffer.from('nullifier'),
+                  vaultAddress.toBytes(),
+                  fromHex(activeNote.nullifier),
+                ],
+                programId,
+              )[0],
+              isSigner: false,
+              isWritable: true,
+            },
           { pubkey: collateral, isSigner: false, isWritable: false },
           { pubkey: repayMint, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: kaminoProgram, isSigner: false, isWritable: false },
         ],
         data: encodeInstruction('repay_secure', {
@@ -1716,14 +1736,18 @@ export const useVeilLend = (mint?: PublicKey) => {
           { pubkey: userCollateralAta, isSigner: false, isWritable: true },
           { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
           { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
-          {
-            pubkey: PublicKey.findProgramAddressSync(
-              [Buffer.from('nullifier'), fromHex(activeNote.nullifier)],
-              programId,
-            )[0],
-            isSigner: false,
-            isWritable: true,
-          },
+            {
+              pubkey: PublicKey.findProgramAddressSync(
+                [
+                  Buffer.from('nullifier'),
+                  vaultAddress.toBytes(),
+                  fromHex(activeNote.nullifier),
+                ],
+                programId,
+              )[0],
+              isSigner: false,
+              isWritable: true,
+            },
           { pubkey: collateral, isSigner: false, isWritable: false },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -1861,26 +1885,45 @@ export const useVeilLend = (mint?: PublicKey) => {
     return Math.max(0, maxBorrow - myPosition.borrow);
   }, [myPosition, vaultStats]);
 
+  const e2eAction = useCallback(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    return buildE2eSignature();
+  }, []);
+
   const fastAdapter = useMemo(
     () =>
-      createFastAdapter({
-        deposit,
-        withdraw,
-        borrow,
-        repay,
-      }),
-    [borrow, deposit, repay, withdraw],
+      E2E_TEST_MODE
+        ? createFastAdapter({
+            deposit: e2eAction,
+            withdraw: e2eAction,
+            borrow: e2eAction,
+            repay: e2eAction,
+          })
+        : createFastAdapter({
+            deposit,
+            withdraw,
+            borrow,
+            repay,
+          }),
+    [borrow, deposit, e2eAction, repay, withdraw],
   );
 
   const secureAdapter = useMemo(
     () =>
-      createFastAdapter({
-        deposit: secureDeposit,
-        withdraw: secureWithdraw,
-        borrow: secureBorrow,
-        repay: secureRepay,
-      }),
-    [secureBorrow, secureDeposit, secureRepay, secureWithdraw],
+      E2E_TEST_MODE
+        ? createFastAdapter({
+            deposit: e2eAction,
+            withdraw: e2eAction,
+            borrow: e2eAction,
+            repay: e2eAction,
+          })
+        : createFastAdapter({
+            deposit: secureDeposit,
+            withdraw: secureWithdraw,
+            borrow: secureBorrow,
+            repay: secureRepay,
+          }),
+    [e2eAction, secureBorrow, secureDeposit, secureRepay, secureWithdraw],
   );
 
   return {

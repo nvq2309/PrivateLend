@@ -587,3 +587,44 @@ Key learnings / gotchas:
 - On macOS, anchor test can fail on genesis archive; delete .anchor/test-ledger and use COPYFILE_DISABLE=1.
 Next step:
 - Fix or skip tests/prd_scenarios.ts anchor.BN usage, then re-run anchor test.
+
+---
+Step 11/12 — Automated acceptance tests (UI acceptance) (Execution Log)
+What changed:
+- src/config/e2e.ts: added E2E mode detection via mode/env/query flag.
+- src/test/TestWalletAdapter.ts: added test wallet adapter for UI automation.
+- src/main.tsx: select test wallet in E2E mode and expose test-mode flag.
+- src/components/Layout.tsx: auto-select/connect test wallet in E2E mode.
+- src/hooks/useVeilLend.ts: E2E wallet fallback for note storage + stub adapters.
+- src/components/ActionModal.tsx: added aria-label for mode toggle button.
+- tests/ui/app.spec.ts: added acceptance coverage for note gate + FAST/SECURE actions.
+- playwright.config.ts: run dev server in E2E mode with no reuse.
+- .env.e2e: added VITE_E2E_TEST_MODE flag.
+- mnt/data/PRD_VeilLend_UI_Todo.json: marked AT-PORTFOLIO-01, AT-SUPPLY-FAST-01, AT-SUPPLY-SECURE-01, AT-ACTIONS-PARITY-01 as passed.
+Commands run + outputs:
+- npx playwright install -> success (installed browsers).
+- npm run test:ui -> success (5 tests passed).
+What passed/failed:
+- UI acceptance tests: passed.
+- Onchain acceptance tests: not run.
+Key learnings / gotchas:
+- Query-flag E2E mode avoids touching production flows while enabling UI automation.
+- Playwright server reuse can bypass mode flags; disable reuse for deterministic E2E setup.
+Next step:
+- Run localnet on-chain acceptance flows for AT-NOTE-01/AT-MERKLE-01/AT-NULLIFIER-01 and update JSON.
+
+---
+Step 11/12 — Automated acceptance tests (On-chain privacy acceptance) (Execution Log)
+What changed:
+- Anchor.toml: excluded Playwright UI tests from Anchor test runner.
+- mnt/data/PRD_VeilLend_UI_Todo.json: marked AT-NOTE-01, AT-MERKLE-01, AT-NULLIFIER-01 as passed.
+Commands run + outputs:
+- rm -rf .anchor/test-ledger && COPYFILE_DISABLE=1 anchor test -> success (22 passing, includes Secure Merkle flow + nullifier tests).
+What passed/failed:
+- AT-NOTE-01: passed (Privacy Phase - SDK note/seed tests).
+- AT-MERKLE-01: passed (Secure Merkle flow append commitment).
+- AT-NULLIFIER-01: passed (double-spend blocked).
+Key learnings / gotchas:
+- Anchor test runner includes all tests/*.ts; exclude Playwright specs to avoid mocha conflicts.
+Next step:
+- Install TypeScript language server and run diagnostics; then confirm full anchor test status.

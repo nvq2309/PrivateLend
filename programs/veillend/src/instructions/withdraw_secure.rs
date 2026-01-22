@@ -7,7 +7,13 @@ use crate::merkle::{append_leaf, verify_merkle_proof};
 use crate::state::*;
 
 #[derive(Accounts)]
-#[instruction(nullifier: [u8; 32])]
+#[instruction(
+    shares_to_burn: u64,
+    encrypted_balance: [u8; 32],
+    current_commitment: [u8; 32],
+    new_commitment: [u8; 32],
+    nullifier: [u8; 32],
+)]
 pub struct WithdrawSecure<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -64,7 +70,7 @@ pub struct WithdrawSecure<'info> {
         init_if_needed,
         payer = user,
         space = 8 + Nullifier::INIT_SPACE,
-        seeds = [NULLIFIER_SEED, nullifier.as_ref()],
+        seeds = [NULLIFIER_SEED, vault.key().as_ref(), nullifier.as_ref()],
         bump,
     )]
     pub nullifier_account: Box<Account<'info, Nullifier>>,

@@ -118,6 +118,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
             </div>
             <button
               type="button"
+              aria-label="Toggle mode"
               onClick={() => onModeChange(mode === 'SECURE' ? 'FAST' : 'SECURE')}
               className={`w-12 h-6 rounded-full transition-all relative ${
                 mode === 'SECURE' ? 'bg-emerald-500' : 'bg-slate-700'

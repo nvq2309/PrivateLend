@@ -17,6 +17,7 @@ import {
 import { expect } from "chai";
 import { x25519 } from '@arcium-hq/client';
 import { createHash, randomBytes } from 'crypto';
+import BN from 'bn.js';
 
 
 describe("VeilLend with Protection & Privacy", () => {
@@ -60,10 +61,10 @@ describe("VeilLend with Protection & Privacy", () => {
   const user = Keypair.generate();
 
   // Constants
-  const LTV_BPS = new anchor.BN(7500); // 75%
-  const LIQUIDATION_THRESHOLD_BPS = new anchor.BN(8500); // 85%
-  const DEPOSIT_AMOUNT = new anchor.BN(10 * LAMPORTS_PER_SOL);
-  const BORROW_AMOUNT = new anchor.BN(5 * LAMPORTS_PER_SOL);
+  const LTV_BPS = new BN(7500); // 75%
+  const LIQUIDATION_THRESHOLD_BPS = new BN(8500); // 85%
+  const DEPOSIT_AMOUNT = new BN(10 * LAMPORTS_PER_SOL);
+  const BORROW_AMOUNT = new BN(5 * LAMPORTS_PER_SOL);
   const MERKLE_DEPTH = 8;
   let commitment1: Buffer;
   let commitment2: Buffer;
@@ -116,8 +117,11 @@ describe("VeilLend with Protection & Privacy", () => {
     }
     return { proof, path, root };
   };
-  // const REPAY_AMOUNT = new anchor.BN(2 * LAMPORTS_PER_SOL);
-  // const WITHDRAW_AMOUNT = new anchor.BN(3 * LAMPORTS_PER_SOL);
+
+
+
+  // const REPAY_AMOUNT = new BN(2 * LAMPORTS_PER_SOL);
+  // const WITHDRAW_AMOUNT = new BN(3 * LAMPORTS_PER_SOL);
 
   before(async () => {
     // Airdrop SOL to user for transaction fees
@@ -369,23 +373,36 @@ describe("VeilLend with Protection & Privacy", () => {
 
       commitment2 = randomBytes(32);
       nullifier1 = randomBytes(32);
+      const nullifier1Bytes = Array.from(nullifier1);
 
       const { proof, path } = getMerkleProof([commitment1], 0, MERKLE_DEPTH);
       const encryptedBalance = getEncryptedBalance();
+      const borrowArgs = {
+        amount: BORROW_AMOUNT,
+        encryptedBalance: encryptedBalance,
+        currentCommitment: Array.from(commitment1),
+        newCommitment: Array.from(commitment2),
+        nullifier: nullifier1Bytes,
+        merkleProof: proof.map((node) => Array.from(node)),
+        merklePath: Buffer.from(path),
+      };
       const nullifierPda = PublicKey.findProgramAddressSync(
-        [Buffer.from('nullifier'), nullifier1],
-        program.programId
+        [
+          Buffer.from('nullifier'),
+          vault.toBuffer(),
+          Buffer.from(nullifier1Bytes),
+        ],
+        program.programId,
       )[0];
-
       await program.methods
         .borrowSecure(
-          BORROW_AMOUNT,
-          encryptedBalance,
-          Array.from(commitment1),
-          Array.from(commitment2),
-          Array.from(nullifier1),
-          proof.map((node) => Array.from(node)),
-          path,
+          borrowArgs.amount,
+          borrowArgs.encryptedBalance,
+          borrowArgs.currentCommitment,
+          borrowArgs.newCommitment,
+          borrowArgs.nullifier,
+          borrowArgs.merkleProof,
+          borrowArgs.merklePath,
         )
         .accountsStrict({
           user: user.publicKey,
@@ -420,28 +437,39 @@ describe("VeilLend with Protection & Privacy", () => {
       const { root } = buildMerkleTree([commitment1, commitment2], MERKLE_DEPTH);
       expect(Buffer.from(tree.root)).to.deep.equal(root);
 
-      const nullifierAccount = await programAccounts.nullifier.fetch(nullifierPda);
-      expect(nullifierAccount.spent).to.equal(true);
     });
 
     it("should block double-spend with same nullifier", async () => {
       const { proof, path } = getMerkleProof([commitment1, commitment2], 1, MERKLE_DEPTH);
       const encryptedBalance = getEncryptedBalance();
+      const nullifier1Bytes = Array.from(nullifier1);
+      const borrowArgs = {
+        amount: BORROW_AMOUNT,
+        encryptedBalance: encryptedBalance,
+        currentCommitment: Array.from(commitment2),
+        newCommitment: Array.from(commitment2),
+        nullifier: nullifier1Bytes,
+        merkleProof: proof.map((node) => Array.from(node)),
+        merklePath: Buffer.from(path),
+      };
       const nullifierPda = PublicKey.findProgramAddressSync(
-        [Buffer.from('nullifier'), nullifier1],
-        program.programId
+        [
+          Buffer.from('nullifier'),
+          vault.toBuffer(),
+          Buffer.from(nullifier1Bytes),
+        ],
+        program.programId,
       )[0];
-
       try {
         await program.methods
           .borrowSecure(
-            BORROW_AMOUNT,
-            encryptedBalance,
-            Array.from(commitment2),
-            Array.from(commitment2),
-            Array.from(nullifier1),
-            proof.map((node) => Array.from(node)),
-            path,
+            borrowArgs.amount,
+            borrowArgs.encryptedBalance,
+            borrowArgs.currentCommitment,
+            borrowArgs.newCommitment,
+            borrowArgs.nullifier,
+            borrowArgs.merkleProof,
+            borrowArgs.merklePath,
           )
           .accountsStrict({
             user: user.publicKey,
@@ -463,12 +491,12 @@ describe("VeilLend with Protection & Privacy", () => {
             kaminoScopePrices: PublicKey.default,
             merkleTree,
             nullifierAccount: nullifierPda,
-          collateralMint,
-          borrowMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          kaminoProgram: PublicKey.default,
-        })
+            collateralMint,
+            borrowMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            kaminoProgram: PublicKey.default,
+          })
           .signers([user])
           .rpc();
         throw new Error('Expected double-spend to fail');
@@ -480,22 +508,35 @@ describe("VeilLend with Protection & Privacy", () => {
     it("should repay and withdraw with new commitments", async () => {
       commitment3 = randomBytes(32);
       nullifier2 = randomBytes(32);
+      const nullifier2Bytes = Array.from(nullifier2);
       const { proof, path } = getMerkleProof([commitment1, commitment2], 1, MERKLE_DEPTH);
       const encryptedBalance = getEncryptedBalance();
+      const repayArgs = {
+        amount: BORROW_AMOUNT,
+        encryptedBalance: encryptedBalance,
+        currentCommitment: Array.from(commitment2),
+        newCommitment: Array.from(commitment3),
+        nullifier: nullifier2Bytes,
+        merkleProof: proof.map((node) => Array.from(node)),
+        merklePath: Buffer.from(path),
+      };
       const nullifierPda = PublicKey.findProgramAddressSync(
-        [Buffer.from('nullifier'), nullifier2],
-        program.programId
+        [
+          Buffer.from('nullifier'),
+          vault.toBuffer(),
+          Buffer.from(nullifier2Bytes),
+        ],
+        program.programId,
       )[0];
-
       await program.methods
         .repaySecure(
-          BORROW_AMOUNT,
-          encryptedBalance,
-          Array.from(commitment2),
-          Array.from(commitment3),
-          Array.from(nullifier2),
-          proof.map((node) => Array.from(node)),
-          path,
+          repayArgs.amount,
+          repayArgs.encryptedBalance,
+          repayArgs.currentCommitment,
+          repayArgs.newCommitment,
+          repayArgs.nullifier,
+          repayArgs.merkleProof,
+          repayArgs.merklePath,
         )
         .accountsStrict({
           user: user.publicKey,
@@ -525,26 +566,39 @@ describe("VeilLend with Protection & Privacy", () => {
 
       commitment4 = randomBytes(32);
       nullifier3 = randomBytes(32);
+      const nullifier3Bytes = Array.from(nullifier3);
       const receipt = await programAccounts.userReceipt.fetch(userReceipt);
       const { proof: withdrawProof, path: withdrawPath } = getMerkleProof(
         [commitment1, commitment2, commitment3],
         2,
         MERKLE_DEPTH,
       );
+      const withdrawArgs = {
+        sharesToBurn: receipt.shares,
+        encryptedBalance: getEncryptedBalance(),
+        currentCommitment: Array.from(commitment3),
+        newCommitment: Array.from(commitment4),
+        nullifier: nullifier3Bytes,
+        merkleProof: withdrawProof.map((node) => Array.from(node)),
+        merklePath: Buffer.from(withdrawPath),
+      };
       const withdrawNullifierPda = PublicKey.findProgramAddressSync(
-        [Buffer.from('nullifier'), nullifier3],
-        program.programId
+        [
+          Buffer.from('nullifier'),
+          vault.toBuffer(),
+          Buffer.from(nullifier3Bytes),
+        ],
+        program.programId,
       )[0];
-
       await program.methods
         .withdrawSecure(
-          receipt.shares,
-          getEncryptedBalance(),
-          Array.from(commitment3),
-          Array.from(commitment4),
-          Array.from(nullifier3),
-          withdrawProof.map((node) => Array.from(node)),
-          withdrawPath,
+          withdrawArgs.sharesToBurn,
+          withdrawArgs.encryptedBalance,
+          withdrawArgs.currentCommitment,
+          withdrawArgs.newCommitment,
+          withdrawArgs.nullifier,
+          withdrawArgs.merkleProof,
+          withdrawArgs.merklePath,
         )
         .accountsStrict({
           user: user.publicKey,

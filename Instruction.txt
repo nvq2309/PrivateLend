@@ -53,6 +53,31 @@ OUTPUTS YOU MUST MAINTAIN:
 - /mnt/data/Progress.txt is appended after each step.
 - If you create additional scripts or test files, keep them discoverable (e.g., /scripts, /tests) and reference them in Progress.txt.
 
+COMMAND COOKBOOK (add to README.md and keep in sync):
+- Install deps: npm install
+- Start localnet: ./scripts/start-validator.sh
+- Bootstrap demo (build/deploy/seed): ./scripts/bootstrap-localnet.sh
+- Run UI dev server: npm run dev
+- Build UI: npm run build
+- Preview UI: npm run preview
+- Build programs: anchor build
+- Deploy to localnet: anchor deploy
+- UI acceptance tests: npm run test:ui
+- On-chain tests: rm -rf .anchor/test-ledger && COPYFILE_DISABLE=1 anchor test
+- On-chain tests (reuse validator): anchor test --skip-local-validator
+- SDK-only tests: npx ts-mocha -p tsconfig.tests.json tests/privacy_phase.ts
+
+GIT COMMIT POLICY:
+- When asked to commit, include updated README.md and instruction.txt if command/process info changed.
+- Anchor test runner must exclude UI Playwright specs (Anchor.toml) to prevent ts-mocha conflicts.
+
+PROJECT LEARNINGS / BEST PRACTICES:
+- Use embedded IDL for browser UI (src/idl/veillend.json) to avoid localnet IDL fetch failures.
+- Avoid Anchor Program constructor in the browser if web3.js copies conflict; prefer Borsh coding for instructions.
+- For E2E UI tests, enable a deterministic test wallet and stub adapters via a dedicated E2E mode.
+- UI acceptance tests should not run inside anchor test; keep Playwright isolated.
+- Note rotation: seed = timestamp + walletAddress + lastTxnId; persist in LOCAL_STORAGE with one active note per wallet.
+
 UI REBUILD DIRECTIVE (from /veillend design):
 - Rebuild the UI from scratch by migrating the design in /veillend into the main /src app.
 - Remove old UI pages/components from /src that are not part of the new design.

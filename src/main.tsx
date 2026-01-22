@@ -5,11 +5,24 @@ import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 
 import App from './App.tsx';
+import { isE2e } from './config/e2e';
 import { SOLANA_ENDPOINT } from './config/solana';
+import { TestWalletAdapter } from './test/TestWalletAdapter';
 import './index.css';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-const wallets = [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
+const e2eEnabled = isE2e();
+const wallets = e2eEnabled
+  ? [new TestWalletAdapter()]
+  : [new PhantomWalletAdapter(), new SolflareWalletAdapter()];
+
+if (e2eEnabled && typeof window !== 'undefined') {
+  window.localStorage.setItem('walletName', 'TestWallet');
+}
+
+if (typeof window !== 'undefined') {
+  (window as Window & { __VEILLEND_TEST_MODE__?: boolean }).__VEILLEND_TEST_MODE__ = e2eEnabled;
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

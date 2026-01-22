@@ -9,7 +9,8 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "test": "anchor test",
-    "test:local": "anchor test --skip-local-validator"
+    "test:local": "anchor test --skip-local-validator",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@arcium-hq/client": "^0.5.1",
@@ -27,6 +28,7 @@
     "react-router-dom": "^6.22.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.1",
     "@types/bn.js": "^5.2.0",
     "@types/chai": "^4.3.11",
     "@types/mocha": "^10.0.6",

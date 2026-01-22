@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { type WalletName } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { isE2e } from '../config/e2e';
 
 type View = 'MARKET' | 'PORTFOLIO';
 
@@ -20,8 +22,15 @@ export const Layout: React.FC<LayoutProps> = ({
   onViewChange,
   clusterLabel,
 }) => {
-  const { publicKey, connected, disconnect } = useWallet();
+  const { publicKey, connected, connect, disconnect, select } = useWallet();
   const { setVisible } = useWalletModal();
+  const e2eEnabled = isE2e();
+
+  useEffect(() => {
+    if (!e2eEnabled || connected) return;
+    select('TestWallet' as WalletName);
+    connect().catch(() => undefined);
+  }, [connect, connected, e2eEnabled, select]);
 
   const handleWalletClick = async () => {
     if (!connected) {

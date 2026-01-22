@@ -16,6 +16,7 @@ import {
 } from './sdk/notes';
 import { generateDemoProof, ProofArtifact } from './sdk/proof';
 import { WSOL_MINT } from './config/solana';
+import { isE2e } from './config/e2e';
 
 const MARKET_BASE = {
   SOL: { price: 145.2, supplyApy: 6.5, borrowApy: 8.2, ltv: 0.75, liquidationThreshold: 0.85 },
@@ -90,6 +91,8 @@ const parseTransactionError = (error: unknown): string => {
 
 const App = () => {
   const { publicKey } = useWallet();
+  const e2eEnabled = isE2e();
+  const walletAddress = publicKey?.toBase58() ?? (e2eEnabled ? 'e2e-wallet' : null);
   const [view, setView] = useState<'MARKET' | 'PORTFOLIO'>('MARKET');
   const [activeAction, setActiveAction] = useState<ActionType | null>(null);
   const [activeSymbol, setActiveSymbol] = useState('SOL');
@@ -215,7 +218,7 @@ const App = () => {
 
   const handleConfirm = async () => {
     if (!activeAction) return;
-    if (!publicKey) {
+    if (!walletAddress) {
       setActionError('Connect wallet to continue.');
       return;
     }
@@ -261,13 +264,13 @@ const App = () => {
 
       if (mode === 'SECURE') {
         setActionMessage('Generating proof and rotating note...');
-        const baseNote = note ?? (await createInitialNoteRecord(publicKey.toBase58()));
+        const baseNote = note ?? (await createInitialNoteRecord(walletAddress));
         const proofArtifact = await generateDemoProof({
-          walletAddress: publicKey.toBase58(),
+          walletAddress,
           noteHash: baseNote.noteHash,
           lastTxnId: baseNote.lastTxnId,
         });
-        nextNote = await rotateNoteRecord(publicKey.toBase58(), signature, baseNote);
+        nextNote = await rotateNoteRecord(walletAddress, signature, baseNote);
         setSuccessNote(nextNote);
         setSuccessProof(proofArtifact);
       }
@@ -318,7 +321,7 @@ const App = () => {
   };
 
   const handleImportNote = () => {
-    if (!publicKey) {
+    if (!walletAddress) {
       showPageError('Connect wallet to import a note.');
       return;
     }
@@ -328,7 +331,7 @@ const App = () => {
     }
     const record: NoteRecord = {
       version: 1,
-      walletAddress: publicKey.toBase58(),
+      walletAddress,
       noteHash: importNoteHash.trim(),
       lastTxnId: importLastTxnId.trim() || 'imported',
       createdAt: Date.now(),
@@ -341,11 +344,11 @@ const App = () => {
   };
 
   const handleCreateInitialNote = async () => {
-    if (!publicKey) {
+    if (!walletAddress) {
       showPageError('Connect wallet to create a note.');
       return;
     }
-    const record = await createInitialNoteRecord(publicKey.toBase58());
+    const record = await createInitialNoteRecord(walletAddress);
     setDraftNote(record);
   };
 

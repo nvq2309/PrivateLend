@@ -17,6 +17,7 @@ import {
 import { expect } from "chai";
 import { x25519 } from '@arcium-hq/client';
 import { randomBytes } from 'crypto';
+import BN from 'bn.js';
 
 
 describe("VeilLend PRD Acceptance Tests", () => {
@@ -49,18 +50,18 @@ describe("VeilLend PRD Acceptance Tests", () => {
   let userReceiptTokenAccount: PublicKey;
   
   let userCollateralAccountAddr: PublicKey;
-  let userBorrowAccountAddr: PublicKey; // For receiving borrowed funds (conceptual)
+  let userBorrowAccountAddr: PublicKey; // For receiving borrowed funds
   let userRepayAccountAddr: PublicKey; // Source for repaying
 
   // Test User
   const user = Keypair.generate();
 
   // Test Constants
-  const LTV_BPS = new anchor.BN(7500); // 75%
-  const LIQUIDATION_THRESHOLD_BPS = new anchor.BN(8500); // 85%
-  const DEPOSIT_AMOUNT = new anchor.BN(10 * LAMPORTS_PER_SOL);
-  const BORROW_AMOUNT = new anchor.BN(5 * LAMPORTS_PER_SOL);
-  const REPAY_AMOUNT = new anchor.BN(2 * LAMPORTS_PER_SOL);
+  const LTV_BPS = new BN(7500); // 75%
+  const LIQUIDATION_THRESHOLD_BPS = new BN(8500); // 85%
+  const DEPOSIT_AMOUNT = new BN(10 * LAMPORTS_PER_SOL);
+  const BORROW_AMOUNT = new BN(5 * LAMPORTS_PER_SOL);
+  const REPAY_AMOUNT = new BN(2 * LAMPORTS_PER_SOL);
   before(async () => {
     // 1. Airdrop SOL
     const airdropSig = await provider.connection.requestAirdrop(user.publicKey, 100 * LAMPORTS_PER_SOL);
@@ -136,8 +137,8 @@ describe("VeilLend PRD Acceptance Tests", () => {
     // let's use userCollateralAccountAddr. If not, we might need another.
     // However, looking at `repay`, it takes `vault_repay_account`.
     // Let's assume standard SPL token accounts.
-    userBorrowAccountAddr = userCollateralAccountAddr;
-    userRepayAccountAddr = userCollateralAccountAddr;
+    userBorrowAccountAddr = PublicKey.default;
+    userRepayAccountAddr = PublicKey.default;
 
     // Vault Repay Account - where repayments go.
     // In `repay.rs`: `vault_repay_account`. Usually this should be the vault's collateral account if it's the same asset?
@@ -153,8 +154,8 @@ describe("VeilLend PRD Acceptance Tests", () => {
       it("Can initialize global state", async () => {
           // Initialize if not already (test reuse might fail if we don't start fresh, 
           // but local validator restart handles that usually).
-          try {
-              await program.methods
+      try {
+          await program.methods
               .initialize(LTV_BPS, LIQUIDATION_THRESHOLD_BPS)
               .accountsStrict({
                   authority: authority.publicKey,
@@ -197,15 +198,26 @@ describe("VeilLend PRD Acceptance Tests", () => {
                   rent: anchor.web3.SYSVAR_RENT_PUBKEY,
               })
               .rpc();
-          } catch (e) {
-              // If already initialized (e.g. by other tests running first), ignore
-              const message = e instanceof Error ? e.message : String(e);
-              if (!message.includes("already in use")) {
-                 // throw e; // Uncomment if we want strict fresh start
-                 console.log("Likely already initialized or error: " + message);
-              }
+      } catch (e) {
+          // If already initialized (e.g. by other tests running first), ignore
+          const message = e instanceof Error ? e.message : String(e);
+          if (!message.includes("already in use")) {
+             // throw e; // Uncomment if we want strict fresh start
+             console.log("Likely already initialized or error: " + message);
           }
-      });
+      }
+
+      if (userBorrowAccountAddr.equals(PublicKey.default)) {
+        const userBorrowAccount = await getOrCreateAssociatedTokenAccount(
+          provider.connection,
+          (authority as any).payer,
+          borrowMint,
+          user.publicKey
+        );
+        userBorrowAccountAddr = userBorrowAccount.address;
+        userRepayAccountAddr = userBorrowAccountAddr;
+      }
+    });
   });
 
   describe("PRD SCENARIO 1: User Deposit & Receipt Creation", () => {
@@ -250,19 +262,19 @@ describe("VeilLend PRD Acceptance Tests", () => {
         
         // Note: Kamino accounts are effectively mocked by passing random valid accounts 
         // as the program currently mocks the CPI call.
-        const kaminoMarket = Keypair.generate().publicKey;
-        const kaminoObligation = Keypair.generate().publicKey;
-        const kaminoLendingMarketAuthority = Keypair.generate().publicKey;
-        const kaminoBorrowReserve = Keypair.generate().publicKey;
-        const kaminoBorrowReserveLiquidityMint = Keypair.generate().publicKey;
-        const kaminoReserveSourceLiquidity = Keypair.generate().publicKey;
-        const kaminoBorrowReserveLiquidityFeeReceiver = Keypair.generate().publicKey;
-        const kaminoReferrerTokenState = Keypair.generate().publicKey;
-        const kaminoPythOracle = Keypair.generate().publicKey;
-        const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
-        const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
-        const kaminoScopePrices = Keypair.generate().publicKey;
-        const kaminoProgram = Keypair.generate().publicKey;
+        const kaminoMarket = PublicKey.default;
+        const kaminoObligation = PublicKey.default;
+        const kaminoLendingMarketAuthority = PublicKey.default;
+        const kaminoBorrowReserve = PublicKey.default;
+        const kaminoBorrowReserveLiquidityMint = PublicKey.default;
+        const kaminoReserveSourceLiquidity = PublicKey.default;
+        const kaminoBorrowReserveLiquidityFeeReceiver = PublicKey.default;
+        const kaminoReferrerTokenState = PublicKey.default;
+        const kaminoPythOracle = PublicKey.default;
+        const kaminoSwitchboardPriceOracle = PublicKey.default;
+        const kaminoSwitchboardTwapOracle = PublicKey.default;
+        const kaminoScopePrices = PublicKey.default;
+        const kaminoProgram = PublicKey.default;
 
         await program.methods
             .borrow(BORROW_AMOUNT, encryptedBalance)
@@ -306,7 +318,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
           const duration = 30; // days
 
           // userRepayAccountAddr is also a token account with funds, use it for payment
-          const paymentAccount = userRepayAccountAddr;
+          const paymentAccount = userCollateralAccountAddr;
 
           await program.methods
             .subscribeProtection(tier, duration)
@@ -336,16 +348,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
       it("User repays debt", async () => {
           const encryptedBalance = getEncryptedBalance();
           
-          const kaminoMarket = Keypair.generate().publicKey;
-          const kaminoObligation = Keypair.generate().publicKey;
-          const kaminoRepayReserve = Keypair.generate().publicKey;
-          const kaminoReserveLiquidityMint = Keypair.generate().publicKey;
-          const kaminoReserveDestinationLiquidity = Keypair.generate().publicKey;
-          const kaminoPythOracle = Keypair.generate().publicKey;
-          const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
-          const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
-          const kaminoScopePrices = Keypair.generate().publicKey;
-          const kaminoProgram = Keypair.generate().publicKey;
+           const kaminoMarket = PublicKey.default;
+           const kaminoObligation = PublicKey.default;
+           const kaminoRepayReserve = PublicKey.default;
+           const kaminoReserveLiquidityMint = PublicKey.default;
+           const kaminoReserveDestinationLiquidity = PublicKey.default;
+           const kaminoPythOracle = PublicKey.default;
+           const kaminoSwitchboardPriceOracle = PublicKey.default;
+           const kaminoSwitchboardTwapOracle = PublicKey.default;
+           const kaminoScopePrices = PublicKey.default;
+           const kaminoProgram = PublicKey.default;
 
           await program.methods
             .repay(REPAY_AMOUNT, encryptedBalance)
@@ -385,16 +397,16 @@ describe("VeilLend PRD Acceptance Tests", () => {
         const encryptedBalance = getEncryptedBalance();
 
         if (remaining.toNumber() > 0) {
-            const kaminoMarket = Keypair.generate().publicKey;
-            const kaminoObligation = Keypair.generate().publicKey;
-            const kaminoRepayReserve = Keypair.generate().publicKey;
-            const kaminoReserveLiquidityMint = Keypair.generate().publicKey;
-            const kaminoReserveDestinationLiquidity = Keypair.generate().publicKey;
-            const kaminoPythOracle = Keypair.generate().publicKey;
-            const kaminoSwitchboardPriceOracle = Keypair.generate().publicKey;
-            const kaminoSwitchboardTwapOracle = Keypair.generate().publicKey;
-            const kaminoScopePrices = Keypair.generate().publicKey;
-            const kaminoProgram = Keypair.generate().publicKey;
+            const kaminoMarket = PublicKey.default;
+            const kaminoObligation = PublicKey.default;
+            const kaminoRepayReserve = PublicKey.default;
+            const kaminoReserveLiquidityMint = PublicKey.default;
+            const kaminoReserveDestinationLiquidity = PublicKey.default;
+            const kaminoPythOracle = PublicKey.default;
+            const kaminoSwitchboardPriceOracle = PublicKey.default;
+            const kaminoSwitchboardTwapOracle = PublicKey.default;
+            const kaminoScopePrices = PublicKey.default;
+            const kaminoProgram = PublicKey.default;
 
             await program.methods
             .repay(remaining, encryptedBalance)
