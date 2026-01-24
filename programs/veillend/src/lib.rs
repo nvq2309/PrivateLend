@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 
+pub mod arcium;
 pub mod constants;
 pub mod errors;
 pub mod instructions;
@@ -23,21 +24,15 @@ pub mod veillend {
         instructions::initialize::initialize(ctx, ltv_bps, liquidation_threshold_bps)
     }
 
-    pub fn initialize_mints(
-        ctx: Context<InitializeMints>,
-    ) -> Result<()> {
+    pub fn initialize_mints(ctx: Context<InitializeMints>) -> Result<()> {
         instructions::initialize_mints::initialize_mints(ctx)
     }
 
-    pub fn initialize_protection(
-        ctx: Context<InitializeProtection>,
-    ) -> Result<()> {
+    pub fn initialize_protection(ctx: Context<InitializeProtection>) -> Result<()> {
         instructions::initialize_protection::initialize_protection(ctx)
     }
 
-    pub fn initialize_merkle_tree(
-        ctx: Context<InitializeMerkleTree>,
-    ) -> Result<()> {
+    pub fn initialize_merkle_tree(ctx: Context<InitializeMerkleTree>) -> Result<()> {
         instructions::initialize_merkle_tree::initialize_merkle_tree(ctx)
     }
 
@@ -56,6 +51,7 @@ pub mod veillend {
         amount: u64,
         encrypted_balance: [u8; 32],
         client_pubkey: [u8; 32],
+        note_hash: [u8; 32],
         commitment: [u8; 32],
     ) -> Result<()> {
         instructions::deposit_secure::deposit_secure(
@@ -63,6 +59,7 @@ pub mod veillend {
             amount,
             encrypted_balance,
             client_pubkey,
+            note_hash,
             commitment,
         )
     }
@@ -74,6 +71,7 @@ pub mod veillend {
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
+        note_hash: [u8; 32],
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -84,6 +82,7 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
+            note_hash,
             merkle_proof,
             merkle_path,
         )
@@ -104,6 +103,7 @@ pub mod veillend {
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
+        note_hash: [u8; 32],
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -114,16 +114,13 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
+            note_hash,
             merkle_proof,
             merkle_path,
         )
     }
 
-    pub fn borrow(
-        ctx: Context<Borrow>,
-        amount: u64,
-        encrypted_balance: [u8; 32],
-    ) -> Result<()> {
+    pub fn borrow(ctx: Context<Borrow>, amount: u64, encrypted_balance: [u8; 32]) -> Result<()> {
         instructions::borrow::borrow(ctx, amount, encrypted_balance)
     }
 
@@ -134,6 +131,7 @@ pub mod veillend {
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
+        note_hash: [u8; 32],
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -144,16 +142,13 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
+            note_hash,
             merkle_proof,
             merkle_path,
         )
     }
 
-    pub fn repay(
-        ctx: Context<Repay>,
-        amount: u64,
-        encrypted_balance: [u8; 32],
-    ) -> Result<()> {
+    pub fn repay(ctx: Context<Repay>, amount: u64, encrypted_balance: [u8; 32]) -> Result<()> {
         instructions::repay::repay(ctx, amount, encrypted_balance)
     }
 
@@ -164,6 +159,7 @@ pub mod veillend {
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
+        note_hash: [u8; 32],
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -174,6 +170,7 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
+            note_hash,
             merkle_proof,
             merkle_path,
         )

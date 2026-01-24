@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, verify_merkle_proof};
@@ -13,6 +14,7 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
 )]
 pub struct WithdrawSecure<'info> {
     #[account(mut)]
@@ -27,11 +29,10 @@ pub struct WithdrawSecure<'info> {
 
     #[account(
         mut,
-        seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
-        bump = user_receipt.bump,
-        constraint = user_receipt.owner == user.key(),
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        bump = note_receipt.bump,
     )]
-    pub user_receipt: Box<Account<'info, UserReceipt>>,
+    pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(
         mut,
@@ -42,9 +43,9 @@ pub struct WithdrawSecure<'info> {
     #[account(
         mut,
         associated_token::mint = receipt_mint,
-        associated_token::authority = user,
+        associated_token::authority = note_receipt,
     )]
-    pub user_receipt_token_account: Box<Account<'info, TokenAccount>>,
+    pub note_receipt_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -87,22 +88,33 @@ pub fn withdraw_secure(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
     require!(shares_to_burn > 0, VeilLendError::InsufficientShares);
 
+    if is_zero_pubkey(&ctx.accounts.note_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if ctx.accounts.note_receipt.note_hash != note_hash {
+        return err!(VeilLendError::InvalidNoteHash);
+    }
+
     require!(
-        ctx.accounts.user_receipt.borrowed_amount == 0,
+        ctx.accounts.note_receipt.borrowed_amount == 0,
         VeilLendError::OutstandingDebt
     );
 
     require!(
-        ctx.accounts.user_receipt.shares >= shares_to_burn,
+        ctx.accounts.note_receipt.shares >= shares_to_burn,
         VeilLendError::InsufficientShares
     );
 
-    require!(ctx.accounts.vault.total_shares > 0, VeilLendError::InsufficientShares);
+    require!(
+        ctx.accounts.vault.total_shares > 0,
+        VeilLendError::InsufficientShares
+    );
 
     require!(
         ctx.accounts.merkle_tree.vault == ctx.accounts.vault.key(),
@@ -124,13 +136,27 @@ pub fn withdraw_secure(
         .checked_div(ctx.accounts.vault.total_shares as u128)
         .ok_or(VeilLendError::MathOverflow)? as u64;
 
-    let burn_ctx = CpiContext::new(
+    require!(
+        ctx.accounts.note_receipt.deposited_collateral >= collateral_to_return,
+        VeilLendError::InsufficientCollateral
+    );
+
+    let vault_key = ctx.accounts.vault.key();
+    let note_seeds = &[
+        NOTE_RECEIPT_SEED,
+        vault_key.as_ref(),
+        note_hash.as_ref(),
+        &[ctx.accounts.note_receipt.bump],
+    ];
+    let note_signer_seeds = &[&note_seeds[..]];
+    let burn_ctx = CpiContext::new_with_signer(
         ctx.accounts.token_program.to_account_info(),
         Burn {
             mint: ctx.accounts.receipt_mint.to_account_info(),
-            from: ctx.accounts.user_receipt_token_account.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
+            from: ctx.accounts.note_receipt_token_account.to_account_info(),
+            authority: ctx.accounts.note_receipt.to_account_info(),
         },
+        note_signer_seeds,
     );
     token::burn(burn_ctx, shares_to_burn)?;
 
@@ -166,16 +192,16 @@ pub fn withdraw_secure(
         .checked_sub(shares_to_burn)
         .ok_or(VeilLendError::MathOverflow)?;
 
-    let user_receipt = &mut ctx.accounts.user_receipt;
-    user_receipt.shares = user_receipt
+    let note_receipt = &mut ctx.accounts.note_receipt;
+    note_receipt.shares = note_receipt
         .shares
         .checked_sub(shares_to_burn)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.deposited_collateral = user_receipt
+    note_receipt.deposited_collateral = note_receipt
         .deposited_collateral
         .checked_sub(collateral_to_return)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.encrypted_balance = encrypted_balance;
+    note_receipt.encrypted_balance = encrypted_balance;
 
     emit!(WithdrawSecureEvent {
         vault: ctx.accounts.vault.key(),

@@ -1,127 +1,134 @@
-# AGENTS.md
+# AGENTS.md — Operating Rules for Humans + AI Agents
 
-This guide is for agentic coding assistants working in this repository.
-It prioritizes the root app in `/Users/cherry/Desktop/Demo Codes/PrivateLend`.
+Last updated: 2026-01-24
 
-## Quick Orientation
-- React + TypeScript + Vite frontend in `src/`.
-- Solana Anchor tests in `tests/` (Mocha + Chai).
-- Tailwind CSS via `tailwind.config.js`.
-- On-chain interaction helpers in `src/sdk/` and `src/hooks/`.
+This file is the single source of truth for **how work is done** in this repository.
+It is intentionally explicit because AI agents need stable constraints.
 
-## Build, Lint, Test
+## Current Project Status (ZK Rewrite)
 
-### Install
-- `npm install`
+- Scope: ZK-first privacy notes with Merkle commitments and note string UX.
+- Circuits: implemented in `circuits/veillend` (Poseidon + Merkle proof + LTV=70%).
+- Tests: SECURE acceptance tests are reset to `passes=false` until proof verification is wired end-to-end.
 
-### Dev Server
-- `npm run dev`
+## Workflow Entry (Required)
 
-### Build
-- `npm run build`
+Before doing any work, follow the workflow in `workflow/`:
 
-### Preview
-- `npm run preview`
+1. Read `workflow/Product_Description.md`
+2. Read `workflow/PRD.md` and `workflow/PRD.json`
+3. Read `workflow/WorkGraph.json` and `workflow/Test_Plan.md`
+4. Use `workflow/Risk_Register.md` and `workflow/Architecture_Decisions.md` to guide tradeoffs
 
-### Lint
-- `npm run lint`
+1. Mission
+   Build the product described in `Product_Description.md` / `Product_Description.txt` and formalized in `PRD.md` and `PRD.json`.
+   Primary goal: ship a correct, testable, demoable system with minimal human ad-hoc QA.
 
-### Tests (Anchor)
-- `npm run test` (alias for `anchor test`)
-- `npm run test:local` (alias for `anchor test --skip-local-validator`)
+2. Canonical artifacts
 
-### Run A Single Test
-Anchor uses Mocha under the hood. Pass Mocha args after `--`.
-- Run one test file:
-  - `anchor test -- --grep "VeilLend" tests/veillend.ts`
-- Run a single test case by name:
-  - `anchor test -- --grep "should deposit collateral"`
-- If a local validator is already running:
-  - `anchor test --skip-local-validator -- --grep "should deposit collateral"`
+- `Product_Description.md` (or `.txt`): problem + scope + user journeys + acceptance criteria (human-owned).
+- `PRD.md`: full product requirements + UX flows + non-goals + constraints.
+- `PRD.json`: structured plan, todo list, acceptance tests, assumptions (machine-readable).
+- `Progress.txt`: append-only execution log with commands run + outcomes + learnings + next steps.
+- Optional but recommended:
+  - `WorkGraph.json`: task dependency graph used for multi-agent parallel execution.
+  - `Risk_Register.md`: top risks and “early tests” to de-risk quickly.
+  - `ADR/`: architecture decision records for key tradeoffs.
 
-### Anchor Tooling Notes
-- Recommended workflow from `tests/README.md`:
-  - `anchor build`
-  - `anchor test` (starts local validator automatically)
-- Manual flow:
-  - `solana-test-validator --reset`
-  - `anchor build && anchor deploy`
-  - `anchor test --skip-local-validator`
+3. Non-negotiable workflow rules (apply to all agents)
+   A. Always start by reading:
+   - this file (`AGENTS.md`)
+   - `PRD.md` (if exists)
+   - `PRD.json` (if exists)
+   - `Progress.txt` (if exists)
+     B. Never work “in the dark”:
+   - before implementing, identify the verification command(s) you will run
+   - after implementing, run the verification command(s) and record results in `Progress.txt`
+     C. Keep changes small and reviewable:
+   - prefer small PR-sized diffs and short feedback loops
+     D. Every P0 requirement must have at least one acceptance test in `PRD.json`.
+     E. Acceptance tests may be marked `passes=true` only with evidence (command output, screenshot, trace, or reproducible steps) recorded in `Progress.txt`.
 
-## Code Style Guide
+4. Parallelism protocol (how we safely do multi-agent work)
+   Goal: maximize throughput without merge conflicts or integration surprises.
 
-### Language + Framework
-- TypeScript with `strict` compiler settings (`tsconfig.json`).
-- React function components and hooks.
-- Vite build tooling; ES modules (`type: module`).
+A. Work is organized as a dependency graph (“WorkGraph”)
 
-### Imports
-- Use ESM `import` syntax everywhere.
-- Prefer grouping imports in this order:
-  1. React/core libs
-  2. Third-party packages (Solana, Anchor, etc.)
-  3. Local modules (relative paths)
-- Keep imports named and explicit; avoid `require`.
-- Use file extensions in TS imports when already used (`./App.tsx`).
+- The master agent maintains `WorkGraph.json` (or the `todo` + `implementation_plan` in `PRD.json` if WorkGraph is absent).
+- Each task has:
+  - a stable interface contract (API/ABI/IDL/types)
+  - a file ownership boundary (allowed directories)
+  - a verification plan (tests/commands)
+  - explicit dependencies
 
-### Formatting
-- 2-space indentation.
-- Semicolons are used in existing files (`src/App.tsx`).
-- Single quotes for strings in TS/TSX.
-- Trailing commas in multiline objects/arrays and function args.
-- Keep JSX props aligned one per line when lengthy.
+B. File ownership (“task boundaries”)
+Each task must declare **allowed paths**. Subagents may only edit allowed paths, except:
 
-### Naming Conventions
-- Components: PascalCase (`Layout`, `RiskIndicator`).
-- Hooks: `useX` prefix (`useVeilLend`).
-- Types/interfaces: PascalCase (`Position`, `NoteRecord`).
-- Constants: `SCREAMING_SNAKE_CASE` for globals and config (`WSOL_MINT`).
-- Local helpers: camelCase (`formatAmount`, `parseAmount`).
+- adding narrow plumbing required by the task (e.g., registering a route in a central router), but keep that change minimal and obvious.
 
-### Types
-- Prefer `type` for simple shapes and unions; `interface` for public object shapes.
-- Avoid `any` unless dealing with external data (keep it localized).
-- Use explicit return types for exported functions when clarity helps.
-- Use union types for variants (`'FAST' | 'SECURE'`).
+C. Interface-first to enable parallel build
+Before multiple agents code in parallel, the master agent must ensure that interface surfaces are frozen:
 
-### React + Hooks
-- Keep hooks at the top level of components.
-- Use `useMemo`/`useCallback` for derived data and stable handlers.
-- Local UI state via `useState`.
-- Keep side effects in `useEffect`, guard with null checks.
+- UI↔Backend: OpenAPI or typed client contract (request/response + error shapes)
+- UI↔Chain: ABI/IDL/contract addresses + event schema
+- Backend↔Chain: program calls + indexing strategy
+  If interfaces are not frozen, parallelism produces rework.
 
-### Error Handling
-- Throw `Error` with descriptive messages for fatal cases.
-- In `catch`, prefer:
-  - `const message = error instanceof Error ? error.message : 'Fallback message.'`
-- Guard browser-only APIs (`localStorage`, `crypto`) with feature checks.
-- Prefer early returns to reduce nesting.
+D. Integration is a dedicated task
+Integration is not “everyone’s job”. It is a specific task owned by an Integrator agent:
 
-### Solana + Anchor Conventions
-- Validate `publicKey` and program IDs before building transactions.
-- Use PDA derivation helpers to avoid duplicated seed logic.
-- Ensure transaction instructions include all required accounts.
-- Refresh cached state after mutations (`refresh()` in hooks).
+- merges stubs into real implementations
+- runs end-to-end harness
+- resolves cache/state invalidation issues
+- converts discovered bugs into new regression tests
 
-### Testing Conventions
-- Mocha + Chai (see `tests/veillend.ts`).
-- Use descriptive `describe` and `it` blocks.
-- Anchor provider setup at suite top.
-- Keep constants in uppercase and reuse for scenario steps.
+5. Testing protocol (stop doing ad-hoc QA every 5 minutes)
+   Testing strategy is layered:
 
-### CSS + UI
-- Tailwind CSS utility classes; keep className strings readable.
-- Reuse shared components from `src/components/`.
-- Keep typography and layout patterns consistent with existing UI.
+- Unit tests: pure logic and data transforms
+- Integration tests: module↔module boundaries (API contracts, chain calls on localnet)
+- Stateful/system tests: cross-action sequences (supply→borrow→repay→switch wallet…)
+- Minimal UI E2E: only critical paths + smoke coverage
 
-## Files To Check First
-- `package.json` for scripts and dependencies.
-- `.eslintrc.cjs` for lint rules.
-- `tsconfig.json` and `tsconfig.tests.json` for TS behavior.
-- `tests/README.md` for Solana/Anchor setup.
+For Web3 apps, “passed unit tests” is not enough. You must include:
 
-## Agent Workflow Tips
-- Keep edits minimal and aligned with existing patterns.
-- Avoid reformatting unrelated blocks.
-- Do not add new tools/configs unless required for the task.
-- If you touch tests, ensure they still run under `anchor test`.
+- Smart contract fuzz/invariant tests (Foundry/Anchor/Rust proptests)
+- Contract tests for API shape stability (Pact or equivalent)
+- A deterministic local test harness (seeded wallets + bootstrap script)
+- A state-machine test suite that generates action sequences and checks invariants
+
+6. Required evidence format (Progress.txt)
+   Whenever you claim something works, record:
+
+- Commands run
+- Outcome (pass/fail)
+- What changed (files)
+- Which acceptance tests were flipped to passes=true (IDs)
+- Any learnings / gotchas
+  (See `Progress_template.txt` for the canonical structure.)
+
+7. Definition of Done (project-level)
+   Minimum bar:
+
+- All P0 acceptance tests pass with evidence
+- README and/or RUNBOOK explains: setup, run, test, demo
+- Known limitations documented
+- Security notes for Web3 (threat model, key management assumptions, non-goals)
+
+8. Tooling expectations (opencode + oh-my-opencode)
+   This repo assumes you may have access to:
+
+- Playwright (for deterministic UI automation)
+- Chrome DevTools automation for debugging
+- Context7 (library/docs retrieval)
+- gh_grep (searching code examples)
+  See your `opencode.json` for enabled MCP tools.
+
+9. Output format for agents
+   Agents must be explicit and brief:
+
+- What you will do
+- What you changed
+- How you verified
+- What remains
+- What you need from the human (only if blocking)

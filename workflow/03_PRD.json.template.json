@@ -1,0 +1,60 @@
+{
+  "project": {
+    "name": "Example Project",
+    "version": "0.1.0",
+    "goals": [],
+    "non_goals": [],
+    "constraints": [],
+    "dependencies": []
+  },
+  "implementation_plan": [
+    {
+      "step_id": "S01",
+      "title": "Repository baseline",
+      "goal": "Green build/test/lint/typecheck",
+      "definition_of_done": [],
+      "targets": []
+    }
+  ],
+  "user_stories": [
+    {
+      "id": "US01",
+      "as": "",
+      "i_want": "",
+      "so_that": "",
+      "priority": "P0",
+      "notes": ""
+    }
+  ],
+  "todo": [
+    {
+      "id": "T01",
+      "title": "",
+      "details": "",
+      "owner": "agent",
+      "depends_on": [],
+      "status": "todo"
+    }
+  ],
+  "acceptance_tests": [
+    {
+      "category": "functional",
+      "description": "Example acceptance test",
+      "steps": [
+        "Given ...",
+        "When ...",
+        "Then ..."
+      ],
+      "passes": false
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A01",
+      "statement": "Example assumption",
+      "impact_if_wrong": "High",
+      "verification": "Run ...",
+      "status": "unverified"
+    }
+  ]
+}

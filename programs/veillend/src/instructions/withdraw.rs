@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount, Transfer};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::state::*;
@@ -63,6 +64,10 @@ pub fn withdraw(
 ) -> Result<()> {
     require!(shares_to_burn > 0, VeilLendError::InsufficientShares);
 
+    if is_zero_pubkey(&ctx.accounts.user_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+
     require!(
         ctx.accounts.user_receipt.borrowed_amount == 0,
         VeilLendError::OutstandingDebt
@@ -73,13 +78,21 @@ pub fn withdraw(
         VeilLendError::InsufficientShares
     );
 
-    require!(ctx.accounts.vault.total_shares > 0, VeilLendError::InsufficientShares);
+    require!(
+        ctx.accounts.vault.total_shares > 0,
+        VeilLendError::InsufficientShares
+    );
 
     let collateral_to_return = (shares_to_burn as u128)
         .checked_mul(ctx.accounts.vault.total_collateral as u128)
         .ok_or(VeilLendError::MathOverflow)?
         .checked_div(ctx.accounts.vault.total_shares as u128)
         .ok_or(VeilLendError::MathOverflow)? as u64;
+
+    require!(
+        ctx.accounts.user_receipt.deposited_collateral >= collateral_to_return,
+        VeilLendError::InsufficientCollateral
+    );
 
     let burn_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),
@@ -93,11 +106,7 @@ pub fn withdraw(
 
     let collateral_mint_key = ctx.accounts.collateral_mint.key();
     let bump = ctx.accounts.vault.bump;
-    let seeds = &[
-        VAULT_SEED,
-        collateral_mint_key.as_ref(),
-        &[bump],
-    ];
+    let seeds = &[VAULT_SEED, collateral_mint_key.as_ref(), &[bump]];
     let signer_seeds = &[&seeds[..]];
 
     let transfer_ctx = CpiContext::new_with_signer(

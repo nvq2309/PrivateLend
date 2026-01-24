@@ -4,30 +4,35 @@ import { useWallet } from '@solana/wallet-adapter-react';
 
 import { ActionModal, ActionType } from './components/ActionModal';
 import { Layout } from './components/Layout';
-import { ProtectionTrancheCard, ProtectionTranche } from './components/ProtectionTrancheCard';
 import { RiskIndicator } from './components/RiskIndicator';
 import { useVeilLend } from './hooks/useVeilLend';
 import { LendingMode } from './sdk/adapter';
 import {
   NoteRecord,
+  buildNoteAccessRecord,
   createInitialNoteRecord,
+  findNoteAccessByString,
+  findNoteRecordByHash,
+  loadNoteAccessRecord,
   rotateNoteRecord,
+  saveNoteAccessRecord,
   saveNoteRecord,
 } from './sdk/notes';
-import { generateDemoProof, ProofArtifact } from './sdk/proof';
-import { WSOL_MINT } from './config/solana';
+import {
+  importPrivacyState,
+  getUnspentNotes,
+  savePrivacyNotes,
+  saveSecrets,
+} from './sdk/commitment';
+import type { ZkProofResult } from './sdk/zkProof';
+import { NOTE_STRING_PREFIX, buildNoteStringFromPrivacyNote } from './sdk/noteString';
+import { WSOL_MINT, USDC_MINT } from './config/solana';
 import { isE2e } from './config/e2e';
 
 const MARKET_BASE = {
   SOL: { price: 145.2, supplyApy: 6.5, borrowApy: 8.2, ltv: 0.75, liquidationThreshold: 0.85 },
   USDC: { price: 1.0, supplyApy: 12.1, borrowApy: 14.5, ltv: 0.8, liquidationThreshold: 0.9 },
 };
-
-const PROTECTION_TRANCHES: ProtectionTranche[] = [
-  { id: 'buffer-1', name: 'Buffer I', triggerLtv: 0.72, coverageLimit: 50000, fee: 180, tier: 1 },
-  { id: 'buffer-2', name: 'Buffer II', triggerLtv: 0.78, coverageLimit: 120000, fee: 420, tier: 2 },
-  { id: 'buffer-3', name: 'Buffer III', triggerLtv: 0.84, coverageLimit: 300000, fee: 780, tier: 3 },
-];
 
 const toUiAmount = (amount: number, decimals: number) =>
   amount / Math.pow(10, decimals);
@@ -46,7 +51,35 @@ const parseAmount = (value: string, decimals: number) => {
 const resolveSymbol = (mint?: PublicKey | null) => {
   if (!mint) return 'USDC';
   if (mint.equals(WSOL_MINT)) return 'SOL';
+  if (mint.equals(USDC_MINT)) return 'USDC';
   return 'USDC';
+};
+
+const resolveBorrowSymbol = (borrowMint: PublicKey | null, collateralMint: PublicKey | null) => {
+  if (borrowMint) return resolveSymbol(borrowMint);
+  if (!collateralMint) return 'USDC';
+  return collateralMint.equals(WSOL_MINT) ? 'USDC' : 'SOL';
+};
+
+const decimalsForSymbol = (symbol: string) => (symbol === 'SOL' ? 9 : 6);
+
+const copyToClipboard = (value: string) => {
+  if (typeof navigator === 'undefined') return;
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.writeText) return;
+  clipboard.writeText(value).catch(() => {});
+};
+
+const persistNoteAccess = (noteRecord: NoteRecord | null, walletAddress: string | null) => {
+  const accessRecord = buildNoteAccessRecord(noteRecord, walletAddress);
+  if (!accessRecord) return;
+  saveNoteAccessRecord(accessRecord);
+};
+
+const copyNoteString = (noteRecord: NoteRecord | null) => {
+  if (!noteRecord) return;
+  const value = noteRecord.noteString ?? noteRecord.noteHash;
+  copyToClipboard(value);
 };
 
 const toShortHash = (value: string, length = 10) =>
@@ -57,14 +90,20 @@ const VEILLEND_ERROR_MAP: Record<string, string> = {
   InsufficientCollateral: 'You don\'t have enough collateral for this action.',
   InsufficientShares: 'You don\'t have enough shares to withdraw.',
   OutstandingDebt: 'Please repay your debt before withdrawing.',
-  BorrowLimitExceeded: 'This would exceed your borrowing limit (75% LTV).',
+  BorrowLimitExceeded: 'This would exceed your borrowing limit (70% LTV).',
   MathOverflow: 'Calculation error. Try a smaller amount.',
   InsufficientLiquidity: 'Not enough liquidity in the vault.',
   HealthFactorTooLow: 'Your health factor is too low for this operation.',
-  InvalidProtectionTier: 'Invalid protection tier selected.',
-  NoProtection: 'You don\'t have an active protection subscription.',
-  ProtectionExpired: 'Your protection subscription has expired.',
+  ArciumClientKeyMissing: 'Missing Arcium client key. Reconnect your wallet and try again.',
+  ArciumClientKeyMismatch: 'Arcium client key mismatch. Clear local storage and reconnect.',
+  InvalidVaultState: 'Vault state mismatch. Refresh and try again.',
+  MerkleProofInvalid: 'Merkle proof failed. Refresh notes and try again.',
+  MerkleTreeFull: 'Merkle tree is full. Try a different vault.',
+  InvalidMerklePath: 'Merkle path invalid. Refresh notes and try again.',
+  MerkleDepthMismatch: 'Merkle tree depth mismatch. Refresh and retry.',
+  InvalidNoteHash: 'Note access hash mismatch. Re-import the latest note.',
 };
+
 
 const parseTransactionError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
@@ -92,7 +131,13 @@ const parseTransactionError = (error: unknown): string => {
 const App = () => {
   const { publicKey } = useWallet();
   const e2eEnabled = isE2e();
-  const walletAddress = publicKey?.toBase58() ?? (e2eEnabled ? 'e2e-wallet' : null);
+  const e2eOverride =
+    typeof window !== 'undefined'
+      ? (window as Window & { __VEILLEND_E2E_WALLET_PUBLIC_KEY__?: string })
+          .__VEILLEND_E2E_WALLET_PUBLIC_KEY__
+      : null;
+  const walletAddress =
+    publicKey?.toBase58() ?? e2eOverride ?? (e2eEnabled ? 'e2e-wallet' : null);
   const [view, setView] = useState<'MARKET' | 'PORTFOLIO'>('MARKET');
   const [activeAction, setActiveAction] = useState<ActionType | null>(null);
   const [activeSymbol, setActiveSymbol] = useState('SOL');
@@ -103,10 +148,10 @@ const App = () => {
   const [actionMessage, setActionMessage] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [successNote, setSuccessNote] = useState<NoteRecord | null>(null);
-  const [successProof, setSuccessProof] = useState<ProofArtifact | null>(null);
+  const [successProof, setSuccessProof] = useState<ZkProofResult | null>(null);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
-  const [proof, setProof] = useState<ProofArtifact | null>(null);
+  const [proof, setProof] = useState<ZkProofResult | null>(null);
   const [pendingNote, setPendingNote] = useState<NoteRecord | null>(null);
   const [noteSaved, setNoteSaved] = useState(false);
   const [importNoteHash, setImportNoteHash] = useState('');
@@ -114,49 +159,109 @@ const App = () => {
   const [draftNote, setDraftNote] = useState<NoteRecord | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
 
+  const solHooks = useVeilLend(WSOL_MINT);
+  const usdcHooks = useVeilLend(USDC_MINT);
+
+  const buildNoteStringForSymbol = useCallback(
+    (symbol: 'SOL' | 'USDC') => {
+      if (!walletAddress) return null;
+      const hooks = symbol === 'SOL' ? solHooks : usdcHooks;
+      const vaultAddress = hooks.vaultAddress?.toBase58();
+      if (!vaultAddress) return null;
+      const latest = getUnspentNotes(walletAddress, vaultAddress).slice(-1)[0];
+      if (!latest) return null;
+      return buildNoteStringFromPrivacyNote(latest, symbol);
+    },
+    [walletAddress, solHooks.vaultAddress, usdcHooks.vaultAddress],
+  );
+
+  const attachLatestNoteString = useCallback(
+    (noteRecord: NoteRecord | null, symbol: 'SOL' | 'USDC') => {
+      if (!noteRecord) return noteRecord;
+      const noteString = buildNoteStringForSymbol(symbol);
+      if (noteString) {
+        return { ...noteRecord, noteString };
+      }
+      return { ...noteRecord, noteString: `${NOTE_STRING_PREFIX}${noteRecord.noteHash}` };
+    },
+    [buildNoteStringForSymbol],
+  );
+
+  const refreshAllNotes = useCallback(() => {
+    solHooks.refreshNote();
+    usdcHooks.refreshNote();
+  }, [solHooks, usdcHooks]);
+
+  const clearAllNotes = useCallback(() => {
+    solHooks.clearNote();
+    usdcHooks.clearNote();
+  }, [solHooks, usdcHooks]);
+
+  const getHooks = useCallback(
+    (action: ActionType | null, symbol: string) => {
+      if (!action) return solHooks;
+
+      if (action === 'SUPPLY' || action === 'WITHDRAW') {
+        if (resolveSymbol(solHooks.collateralMint) === symbol) return solHooks;
+        if (resolveSymbol(usdcHooks.collateralMint) === symbol) return usdcHooks;
+      } else {
+        if (resolveBorrowSymbol(solHooks.borrowMintAddress, solHooks.collateralMint) === symbol) return solHooks;
+        if (resolveBorrowSymbol(usdcHooks.borrowMintAddress, usdcHooks.collateralMint) === symbol) return usdcHooks;
+      }
+      return solHooks;
+    },
+    [solHooks, usdcHooks]
+  );
+
+  const activeHooks = getHooks(activeAction, activeSymbol);
+
   const {
     cluster,
     note,
     myPosition,
-    vaultStats,
     walletBalanceLamports,
     collateralBalanceLamports,
     borrowBalanceLamports,
     usdcBalanceLamports,
-    usdcVaultCollateralLamports,
     collateralDecimals,
-    borrowDecimals,
     collateralMint,
-    borrowMintAddress,
     borrowCapacityLamports,
-    protectionPoolStats,
     programError,
     fastAdapter,
     secureAdapter,
-    subscribeProtection,
-    refreshNote,
-    clearNote,
-  } = useVeilLend();
+    vaultAuthority,
+    initializeMerkleTree,
+    isMerkleTreeInitialized,
+  } = activeHooks;
 
-  const collateralSymbol = resolveSymbol(collateralMint);
-  const borrowSymbol = resolveSymbol(borrowMintAddress);
+  const solPosition = solHooks.displayPosition ?? solHooks.myPosition;
+  const usdcPosition = usdcHooks.displayPosition ?? usdcHooks.myPosition;
 
-  const marketRows = useMemo(() => {
-    const fallback = { price: 0, supplyApy: 0, borrowApy: 0, ltv: 0, liquidationThreshold: 0 };
-    return [
-      {
-        symbol: collateralSymbol,
-        ...(MARKET_BASE[collateralSymbol as keyof typeof MARKET_BASE] ?? fallback),
-      },
-      {
-        symbol: borrowSymbol,
-        ...(MARKET_BASE[borrowSymbol as keyof typeof MARKET_BASE] ?? fallback),
-      },
-    ];
-  }, [borrowSymbol, collateralSymbol]);
+  const activePosition = activeHooks.displayPosition ?? activeHooks.myPosition;
+
+  const unifiedMarketRows = useMemo(() => {
+    const assets = ['SOL', 'USDC'];
+    const fallback = { price: 0, supplyApy: 0, borrowApy: 0 };
+
+    return assets.map(symbol => {
+      const stats = MARKET_BASE[symbol as keyof typeof MARKET_BASE] ?? fallback;
+      return {
+        symbol,
+        ...stats,
+      };
+    });
+  }, []);
 
   const maxByAction = useCallback(
     (action: ActionType) => {
+      const e2eUseRealMax =
+        typeof window !== 'undefined'
+          ? (window as Window & { __VEILLEND_E2E_USE_REAL_MAX__?: boolean })
+              .__VEILLEND_E2E_USE_REAL_MAX__
+          : false;
+      if (e2eEnabled && !e2eUseRealMax) {
+        return 10;
+      }
       switch (action) {
         case 'SUPPLY':
           return toUiAmount(
@@ -166,19 +271,20 @@ const App = () => {
             collateralDecimals,
           );
         case 'WITHDRAW':
-          return toUiAmount(myPosition?.deposit ?? 0, collateralDecimals);
+          return toUiAmount(activePosition?.deposit ?? 0, collateralDecimals);
         case 'BORROW':
-          return toUiAmount(borrowCapacityLamports, borrowDecimals);
+          return toUiAmount(borrowCapacityLamports, decimalsForSymbol(activeSymbol));
         case 'REPAY':
-          return toUiAmount(borrowBalanceLamports, borrowDecimals);
+          return toUiAmount(borrowBalanceLamports, decimalsForSymbol(activeSymbol));
         default:
           return 0;
       }
     },
     [
+      activePosition,
+      activeSymbol,
       borrowBalanceLamports,
       borrowCapacityLamports,
-      borrowDecimals,
       collateralBalanceLamports,
       collateralDecimals,
       collateralMint,
@@ -188,16 +294,20 @@ const App = () => {
   );
 
   const decimalsByAction = useCallback(
-    (action: ActionType) =>
-      action === 'BORROW' || action === 'REPAY' ? borrowDecimals : collateralDecimals,
-    [borrowDecimals, collateralDecimals],
+    (action: ActionType, symbol: string) =>
+      action === 'BORROW' || action === 'REPAY'
+        ? decimalsForSymbol(symbol)
+        : collateralDecimals,
+    [collateralDecimals],
   );
 
   const openAction = (action: ActionType, symbol: string) => {
+    const nextHooks = getHooks(action, symbol);
+    const nextMode: LendingMode = nextHooks.isMerkleTreeInitialized ? 'SECURE' : 'FAST';
     setActiveAction(action);
     setActiveSymbol(symbol);
     setAmount('');
-    setMode('SECURE');
+    setMode(nextMode);
     setActionError(null);
     setProof(null);
     setPendingNote(null);
@@ -216,17 +326,47 @@ const App = () => {
     setNoteSaved(false);
   };
 
+  const showMerkleInit = mode === 'SECURE' && !isMerkleTreeInitialized;
+  const canInitMerkleTree = Boolean(publicKey && vaultAuthority && publicKey.equals(vaultAuthority));
+
+  const handleInitMerkleTree = async () => {
+    setActionBusy(true);
+    setActionMessage('Initializing privacy tree...');
+    setActionError(null);
+    try {
+      await initializeMerkleTree();
+      showActionSuccess('Merkle tree initialized successfully.');
+    } catch (error) {
+      setActionError(parseTransactionError(error));
+    } finally {
+      setActionBusy(false);
+      setActionMessage('');
+    }
+  };
+
   const handleConfirm = async () => {
     if (!activeAction) return;
+    if (showMerkleInit) {
+      setActionError('Merkle tree not initialized.');
+      return;
+    }
     if (!walletAddress) {
       setActionError('Connect wallet to continue.');
       return;
     }
 
-    const decimals = decimalsByAction(activeAction);
+    const decimals = decimalsByAction(activeAction, activeSymbol);
     const lamports = parseAmount(amount, decimals);
     if (!lamports) {
       setActionError('Enter a valid amount.');
+      return;
+    }
+
+    const maxAmount = maxByAction(activeAction);
+    const maxLamports = Math.floor(maxAmount * Math.pow(10, decimals));
+    if (lamports > maxLamports) {
+      const formattedMax = new Intl.NumberFormat('en-US', { maximumFractionDigits: 4 }).format(maxAmount);
+      setActionError(`Amount exceeds maximum of ${formattedMax}.`);
       return;
     }
 
@@ -241,41 +381,58 @@ const App = () => {
     setSuccessProof(null);
     const actionLabel = activeAction.toLowerCase();
     let nextNote: NoteRecord | null = null;
+    let proofResult: ZkProofResult | null = null;
 
     try {
       let signature = '';
       const adapter = mode === 'SECURE' ? secureAdapter : fastAdapter;
       switch (activeAction) {
         case 'SUPPLY':
-          signature = await adapter.supply(lamports);
+          {
+            const result = await adapter.supply(lamports);
+            signature = result.signature;
+            proofResult = result.proof ?? null;
+          }
           break;
         case 'BORROW':
-          signature = await adapter.borrow(lamports);
+          {
+            const result = await adapter.borrow(lamports);
+            signature = result.signature;
+            proofResult = result.proof ?? null;
+          }
           break;
         case 'REPAY':
-          signature = await adapter.repay(lamports);
+          {
+            const result = await adapter.repay(lamports);
+            signature = result.signature;
+            proofResult = result.proof ?? null;
+          }
           break;
         case 'WITHDRAW':
-          signature = await adapter.withdraw(lamports);
+          {
+            const result = await adapter.withdraw(lamports);
+            signature = result.signature;
+            proofResult = result.proof ?? null;
+          }
           break;
         default:
           break;
       }
 
       if (mode === 'SECURE') {
-        setActionMessage('Generating proof and rotating note...');
-        const baseNote = note ?? (await createInitialNoteRecord(walletAddress));
-        const proofArtifact = await generateDemoProof({
-          walletAddress,
-          noteHash: baseNote.noteHash,
-          lastTxnId: baseNote.lastTxnId,
-        });
+        if (!note) {
+          setActionError('Import or create a note access key before using secure mode.');
+          return;
+        }
+        setActionMessage('Rotating note...');
+        const baseNote = note;
         nextNote = await rotateNoteRecord(walletAddress, signature, baseNote);
-        setSuccessNote(nextNote);
-        setSuccessProof(proofArtifact);
+        setProof(proofResult);
+        setPendingNote(nextNote);
+      } else {
+        closeAction();
       }
 
-      closeAction();
       showActionSuccess(`${actionLabel} completed successfully.`, mode === 'SECURE' && Boolean(nextNote));
     } catch (error) {
       setActionError(parseTransactionError(error));
@@ -287,10 +444,14 @@ const App = () => {
 
   const handleSaveNote = () => {
     if (!pendingNote) return;
-    saveNoteRecord(pendingNote);
-    refreshNote();
+    const withString = attachLatestNoteString(pendingNote, activeSymbol as 'SOL' | 'USDC');
+    saveNoteRecord(withString ?? pendingNote);
+    persistNoteAccess(withString ?? pendingNote, walletAddress);
+    copyNoteString(withString ?? pendingNote);
+    refreshAllNotes();
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 3000);
+    closeAction();
   };
 
   const showActionSuccess = (message: string, keepOpen = false) => {
@@ -308,8 +469,11 @@ const App = () => {
 
   const handleSaveSuccessNote = () => {
     if (!successNote) return;
-    saveNoteRecord(successNote);
-    refreshNote();
+    const withString = attachLatestNoteString(successNote, activeSymbol as 'SOL' | 'USDC');
+    saveNoteRecord(withString ?? successNote);
+    persistNoteAccess(withString ?? successNote, walletAddress);
+    copyNoteString(withString ?? successNote);
+    refreshAllNotes();
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 3000);
     dismissActionSuccess();
@@ -326,19 +490,59 @@ const App = () => {
       return;
     }
     if (!importNoteHash) {
-      showPageError('Paste the note hash to import.');
+      showPageError('Paste the note string to import.');
       return;
     }
-    const record: NoteRecord = {
-      version: 1,
-      walletAddress,
-      noteHash: importNoteHash.trim(),
-      lastTxnId: importLastTxnId.trim() || 'imported',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+    const rawInput = importNoteHash.trim();
+    const isHashInput = /^[0-9a-fA-F]{64}$/.test(rawInput);
+    const accessRecord = isHashInput
+      ? loadNoteAccessRecord(rawInput)
+      : findNoteAccessByString(rawInput);
+    const noteHash = isHashInput ? rawInput : accessRecord?.noteHash;
+    if (!noteHash) {
+      showPageError('Invalid note string.');
+      return;
+    }
+
+    const existing = findNoteRecordByHash(noteHash);
+    if (!accessRecord && existing && existing.walletAddress !== walletAddress) {
+      importPrivacyState(existing.walletAddress, walletAddress);
+    }
+
+    if (accessRecord?.privacyNotes?.length) {
+      savePrivacyNotes(walletAddress, accessRecord.privacyNotes);
+    }
+    if (accessRecord?.secrets?.blindingFactor && accessRecord?.secrets?.spendingKey) {
+      saveSecrets(walletAddress, accessRecord.secrets);
+    }
+
+    if (!accessRecord && !existing) {
+      showPageError('Note access not found on this device. Ask the sender to share the latest note string.');
+      return;
+    }
+
+    const lastTxnId = importLastTxnId.trim()
+      || accessRecord?.lastTxnId
+      || existing?.lastTxnId
+      || 'imported';
+    const record: NoteRecord = existing
+      ? {
+          ...existing,
+          walletAddress,
+          lastTxnId,
+          updatedAt: Date.now(),
+        }
+      : {
+          version: 1,
+          walletAddress,
+          noteHash,
+          noteString: isHashInput ? undefined : rawInput,
+          lastTxnId,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
     saveNoteRecord(record);
-    refreshNote();
+    refreshAllNotes();
     setImportNoteHash('');
     setImportLastTxnId('');
   };
@@ -354,21 +558,12 @@ const App = () => {
 
   const handleSaveDraftNote = () => {
     if (!draftNote) return;
-    saveNoteRecord(draftNote);
-    refreshNote();
+    const withString = attachLatestNoteString(draftNote, 'SOL');
+    saveNoteRecord(withString ?? draftNote);
+    persistNoteAccess(withString ?? draftNote, walletAddress);
+    copyNoteString(withString ?? draftNote);
+    refreshAllNotes();
     setDraftNote(null);
-  };
-
-  const handlePurchaseProtection = async (tranche: ProtectionTranche) => {
-    if (!publicKey) {
-      showPageError('Connect wallet to purchase protection.');
-      return;
-    }
-    try {
-      await subscribeProtection(tranche.tier, 30);
-    } catch (error) {
-      showPageError(parseTransactionError(error));
-    }
   };
 
   const handleSeedVault = async () => {
@@ -376,15 +571,15 @@ const App = () => {
       showPageError('Connect wallet to seed the vault.');
       return;
     }
-    if (!vaultStats) {
+    if (!usdcHooks.vaultStats) {
       showPageError('Vault is not initialized yet.');
       return;
     }
     setSeedBusy(true);
     setSeedError(null);
     try {
-      await fastAdapter.supply(seedAmountLamports);
-      showActionSuccess(`Seeded vault with 1,000 ${collateralSymbol}.`);
+      await usdcHooks.fastAdapter.supply(seedAmountLamports);
+      showActionSuccess('Seeded vault with 1,000 USDC.');
     } catch (error) {
       setSeedError(parseTransactionError(error));
     } finally {
@@ -392,14 +587,11 @@ const App = () => {
     }
   };
 
-  const vaultCollateral = vaultStats?.totalCollateral ?? 0;
-  const vaultBorrowed = vaultStats?.totalBorrowed ?? 0;
-  const healthFactor = myPosition?.healthFactor ?? 0;
-  const collateralPrice = MARKET_BASE[collateralSymbol as keyof typeof MARKET_BASE]?.price ?? 0;
-  const tvlUsd = toUiAmount(vaultCollateral, collateralDecimals) * collateralPrice;
-  const seedAmountLamports = Math.floor(1000 * Math.pow(10, collateralDecimals));
-  const seedReady = collateralBalanceLamports >= seedAmountLamports;
-  const showSeedVault = Boolean(vaultStats) && vaultCollateral === 0 && collateralSymbol === 'USDC';
+  const usdcVaultCollateral = usdcHooks.vaultStats?.totalCollateral ?? 0;
+  const healthFactor = activePosition?.healthFactor ?? 0;
+  const seedAmountLamports = Math.floor(1000 * Math.pow(10, usdcHooks.collateralDecimals));
+  const seedReady = usdcHooks.collateralBalanceLamports >= seedAmountLamports;
+  const showSeedVault = Boolean(usdcHooks.vaultStats) && usdcVaultCollateral === 0;
 
   return (
     <Layout activeView={view} onViewChange={setView} clusterLabel={cluster.toUpperCase()}>
@@ -416,13 +608,11 @@ const App = () => {
             </p>
             <div className="space-y-1">
               <p className="text-2xl font-bold">
-                {formatAmount(vaultCollateral, collateralDecimals)} {collateralSymbol}
+                {formatAmount(solHooks.vaultStats?.totalCollateral ?? 0, 9)} SOL
               </p>
-              {collateralSymbol !== 'USDC' && (
-                <p className="text-sm text-slate-400">
-                  {formatAmount(usdcVaultCollateralLamports, 6)} USDC
-                </p>
-              )}
+              <p className="text-sm text-slate-400">
+                {formatAmount(usdcHooks.vaultStats?.totalCollateral ?? 0, 6)} USDC
+              </p>
             </div>
             {showSeedVault && (
               <div className="mt-4 space-y-2">
@@ -432,11 +622,11 @@ const App = () => {
                   disabled={!seedReady || seedBusy}
                   className="w-full rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-200 transition-all hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {seedBusy ? 'Seeding vault...' : `Seed 1,000 ${collateralSymbol}`}
+                  {seedBusy ? 'Seeding vault...' : 'Seed 1,000 USDC'}
                 </button>
                 {!seedReady && (
                   <p className="text-[10px] text-slate-400">
-                    Mint at least 1,000 {collateralSymbol} to your wallet to seed the vault.
+                    Mint at least 1,000 USDC to your wallet to seed the vault.
                   </p>
                 )}
                 {seedError && (
@@ -450,16 +640,24 @@ const App = () => {
               Vault TVL
             </p>
             <p className="text-2xl font-bold">
-              ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(tvlUsd)}
+              ${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(
+                (toUiAmount(solHooks.vaultStats?.totalCollateral ?? 0, 9) * MARKET_BASE.SOL.price) +
+                (toUiAmount(usdcHooks.vaultStats?.totalCollateral ?? 0, 6) * MARKET_BASE.USDC.price)
+              )}
             </p>
           </div>
           <div className="glass p-6 rounded-3xl border-white/10">
             <p className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-1">
               Vault Borrowed
             </p>
-            <p className="text-2xl font-bold text-red-300">
-              {formatAmount(vaultBorrowed, borrowDecimals)} {borrowSymbol}
-            </p>
+            <div className="space-y-1">
+              <p className="text-2xl font-bold text-red-300">
+                {formatAmount(solHooks.vaultStats?.totalBorrowed ?? 0, 6)} USDC
+              </p>
+              <p className="text-sm text-red-300/60">
+                {formatAmount(usdcHooks.vaultStats?.totalBorrowed ?? 0, 9)} SOL
+              </p>
+            </div>
           </div>
           <div className="glass p-6 rounded-3xl border-emerald-500/20 bg-emerald-500/[0.02]">
             <p className="text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1">
@@ -492,7 +690,7 @@ const App = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {marketRows.map((market) => (
+                    {unifiedMarketRows.map((market) => (
                       <tr key={market.symbol} className="group hover:bg-white/[0.02] transition-colors">
                         <td className="px-6 py-5">
                           <div className="flex items-center gap-3">
@@ -557,7 +755,7 @@ const App = () => {
                         <div>
                           <h2 className="text-2xl font-bold text-white mb-2">Private Vault Access</h2>
                           <p className="text-slate-400 max-w-md mx-auto">
-                            Your financial data is encrypted. Provide your unique note hash to unlock your position or initialize a new shielded identity.
+                Your financial data is encrypted. Paste your note string to unlock your position or initialize a new shielded identity.
                           </p>
                         </div>
                       </div>
@@ -577,7 +775,7 @@ const App = () => {
                               type="text"
                               value={importNoteHash}
                               onChange={(event) => setImportNoteHash(event.target.value)}
-                              placeholder="Paste note hash..."
+                placeholder="Paste note string..."
                               className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm focus:border-emerald-500/50 focus:outline-none transition-colors font-mono"
                             />
                             <input
@@ -624,8 +822,11 @@ const App = () => {
                             <div className="space-y-3 relative z-10">
                               <div className="p-3 bg-black/40 rounded-xl border border-emerald-500/20">
                                 <p className="text-[10px] uppercase tracking-widest text-emerald-500/70 font-bold mb-2">Your New Note</p>
-                                <code className="text-xs font-mono text-emerald-300 break-all block leading-relaxed">
-                                  {draftNote.noteHash}
+                                <code
+                                  className="text-xs font-mono text-emerald-300 break-all block leading-relaxed"
+                                  data-snapshot="dynamic"
+                                >
+                    {draftNote.noteString ?? draftNote.noteHash}
                                 </code>
                               </div>
                               <button
@@ -648,13 +849,16 @@ const App = () => {
                         <div className="flex items-center gap-3">
                           <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                           <span className="text-sm font-bold tracking-wide text-slate-200">VAULT UNLOCKED</span>
-                          <span className="text-xs font-mono text-slate-500 px-2 py-0.5 bg-white/5 rounded">
-                            {toShortHash(note.noteHash, 8)}
+                          <span
+                            className="text-xs font-mono text-slate-500 px-2 py-0.5 bg-white/5 rounded"
+                            data-snapshot="dynamic"
+                          >
+                    {toShortHash(note.noteString ?? note.noteHash, 8)}
                           </span>
                         </div>
                         <button
                           type="button"
-                          onClick={clearNote}
+                          onClick={clearAllNotes}
                           className="text-xs font-bold text-slate-400 hover:text-white flex items-center gap-2 transition-colors"
                         >
                           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -670,36 +874,38 @@ const App = () => {
                           
                           <div className="relative z-10">
                             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Collateral Assets</p>
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-4xl font-bold text-white">
-                                {formatAmount(myPosition?.deposit ?? 0, collateralDecimals)}
-                              </span>
-                              <span className="text-xl font-medium text-emerald-400">{collateralSymbol}</span>
+                            <div className="space-y-2">
+                              <div className="flex items-baseline justify-between">
+                                <span className="text-2xl font-bold text-white">
+                                  {formatAmount(solPosition?.deposit ?? 0, 9)}
+                                </span>
+                                <span className="text-lg font-medium text-emerald-400">SOL</span>
+                              </div>
+                              <div className="flex items-baseline justify-between">
+                                <span className="text-2xl font-bold text-white">
+                                  {formatAmount(usdcPosition?.deposit ?? 0, 6)}
+                                </span>
+                                <span className="text-lg font-medium text-emerald-400">USDC</span>
+                              </div>
                             </div>
-                            <p className="text-sm text-slate-500 mt-1">
-                              Available to withdraw: {formatAmount(myPosition?.deposit ?? 0, collateralDecimals)} {collateralSymbol}
-                            </p>
                           </div>
 
                           <div className="flex gap-3 relative z-10 pt-4">
                             <button
                               type="button"
-                              onClick={() => openAction('SUPPLY', collateralSymbol)}
+                              onClick={() => openAction('SUPPLY', 'SOL')}
                               className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 text-slate-950 font-bold text-sm hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2"
                             >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                               </svg>
-                              Deposit
+                              Deposit SOL
                             </button>
                             <button
                               type="button"
-                              onClick={() => openAction('WITHDRAW', collateralSymbol)}
+                              onClick={() => openAction('WITHDRAW', 'SOL')}
                               className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" transform="rotate(45 12 12)" />
-                              </svg>
                               Withdraw
                             </button>
                           </div>
@@ -710,36 +916,38 @@ const App = () => {
 
                           <div className="relative z-10">
                             <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Outstanding Debt</p>
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-4xl font-bold text-white">
-                                {formatAmount(myPosition?.borrow ?? 0, borrowDecimals)}
-                              </span>
-                              <span className="text-xl font-medium text-red-300">{borrowSymbol}</span>
+                            <div className="space-y-2">
+                              <div className="flex items-baseline justify-between">
+                                <span className="text-2xl font-bold text-white">
+                                  {formatAmount(solPosition?.borrow ?? 0, 6)}
+                                </span>
+                                <span className="text-lg font-medium text-red-300">USDC</span>
+                              </div>
+                              <div className="flex items-baseline justify-between">
+                                <span className="text-2xl font-bold text-white">
+                                  {formatAmount(usdcPosition?.borrow ?? 0, 9)}
+                                </span>
+                                <span className="text-lg font-medium text-red-300">SOL</span>
+                              </div>
                             </div>
-                            <p className="text-sm text-slate-500 mt-1">
-                              Interest accruing at {(MARKET_BASE[borrowSymbol as keyof typeof MARKET_BASE]?.borrowApy ?? 0).toFixed(1)}% APY
-                            </p>
                           </div>
 
                           <div className="flex gap-3 relative z-10 pt-4">
                             <button
                               type="button"
-                              onClick={() => openAction('BORROW', borrowSymbol)}
+                              onClick={() => openAction('BORROW', 'USDC')}
                               className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
                             >
                               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                               </svg>
-                              Borrow
+                              Borrow USDC
                             </button>
                             <button
                               type="button"
-                              onClick={() => openAction('REPAY', borrowSymbol)}
+                              onClick={() => openAction('REPAY', 'USDC')}
                               className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
                               Repay
                             </button>
                           </div>
@@ -748,9 +956,13 @@ const App = () => {
 
                       <div className="px-6 py-4 bg-black/20 border-t border-white/5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 text-[10px] text-slate-500 font-mono uppercase tracking-wider">
                         <div className="flex items-center gap-4">
-                          <span>Updated: {new Date(note.updatedAt).toLocaleString()}</span>
+                          <span data-snapshot="dynamic">
+                            Updated: {new Date(note.updatedAt).toLocaleString()}
+                          </span>
                           <span className="hidden md:inline text-white/10">|</span>
-                          <span>Last Tx: {toShortHash(note.lastTxnId, 16)}</span>
+                          <span data-snapshot="dynamic">
+                            Last Tx: {toShortHash(note.lastTxnId, 16)}
+                          </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <div className={`w-1.5 h-1.5 rounded-full ${healthFactor > 1.2 ? 'bg-emerald-500' : 'bg-red-500'}`} />
@@ -764,16 +976,6 @@ const App = () => {
                 )}
               </div>
             )}
-
-            <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {PROTECTION_TRANCHES.map((tranche) => (
-                <ProtectionTrancheCard
-                  key={tranche.id}
-                  tranche={tranche}
-                  onPurchase={handlePurchaseProtection}
-                />
-              ))}
-            </section>
           </div>
 
           <div className="space-y-6">
@@ -811,17 +1013,6 @@ const App = () => {
                     {formatAmount(usdcBalanceLamports, 6, 2)}
                   </span>
                 </div>
-                <div className="flex items-center justify-between bg-black/20 rounded-xl px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center font-bold text-xs text-white">
-                      B
-                    </div>
-                    <span className="text-sm font-semibold text-slate-200">Borrow Token</span>
-                  </div>
-                  <span className="text-lg font-bold font-mono text-white">
-                    {formatAmount(borrowBalanceLamports, borrowDecimals, 2)}
-                  </span>
-                </div>
               </div>
             </section>
 
@@ -836,13 +1027,25 @@ const App = () => {
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-300">Deposited</span>
                     <span className="font-bold font-mono text-emerald-300">
-                      {formatAmount(myPosition?.deposit ?? 0, collateralDecimals, 4)} {collateralSymbol}
+                      {formatAmount(solPosition?.deposit ?? 0, 9, 4)} SOL
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300">Deposited</span>
+                    <span className="font-bold font-mono text-emerald-300">
+                      {formatAmount(usdcPosition?.deposit ?? 0, 6, 2)} USDC
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-slate-300">Borrowed</span>
                     <span className="font-bold font-mono text-red-300">
-                      {formatAmount(myPosition?.borrow ?? 0, borrowDecimals, 2)} {borrowSymbol}
+                      {formatAmount(solPosition?.borrow ?? 0, 6, 2)} USDC
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-300">Borrowed</span>
+                    <span className="font-bold font-mono text-red-300">
+                      {formatAmount(usdcPosition?.borrow ?? 0, 9, 4)} SOL
                     </span>
                   </div>
                 </div>
@@ -861,35 +1064,6 @@ const App = () => {
                   ? 'Aggregate position looks stable. Consider increasing reserves to hedge tail risk.'
                   : 'Risk elevated. Add collateral or reduce borrow exposure before volatility spikes.'}"
               </p>
-            </section>
-
-            <section className="glass rounded-3xl p-6 border-white/10">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-xs uppercase tracking-widest text-slate-300 font-bold">
-                  Protection Reserve
-                </p>
-                <span className="text-[10px] text-slate-400">{protectionPoolStats?.totalSubscribers ?? 0} members</span>
-              </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-slate-300">Reserve</span>
-                  <span className="font-bold">
-                    {formatAmount(protectionPoolStats?.reserveBalance ?? 0, collateralDecimals)} {collateralSymbol}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-300">Coverage</span>
-                  <span className="font-bold">
-                    {formatAmount(protectionPoolStats?.totalCoverage ?? 0, borrowDecimals)} {borrowSymbol}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-300">Premiums</span>
-                  <span className="font-bold">
-                    {formatAmount(protectionPoolStats?.totalPremiumCollected ?? 0, borrowDecimals)} {borrowSymbol}
-                  </span>
-                </div>
-              </div>
             </section>
           </div>
         </div>
@@ -914,6 +1088,9 @@ const App = () => {
           onClose={closeAction}
           onSaveNote={pendingNote ? handleSaveNote : undefined}
           onMaxClick={() => setAmount(String(maxByAction(activeAction).toFixed(4)))}
+          showMerkleInit={showMerkleInit}
+          canInitMerkleTree={canInitMerkleTree}
+          onInitMerkleTree={handleInitMerkleTree}
         />
       )}
 
@@ -936,18 +1113,18 @@ const App = () => {
             <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-3 space-y-2">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-emerald-100/80 font-bold mb-1">
-                  Proof hash
+                  Proof signals
                 </p>
-                <p className="font-mono break-all text-emerald-100">
-                  {successProof.proofHash}
+                <p className="font-mono break-all text-emerald-100" data-snapshot="dynamic">
+                  {successProof.publicSignals.join(', ')}
                 </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-emerald-100/80 font-bold mb-1">
                   New note
                 </p>
-                <p className="font-mono break-all text-emerald-100">
-                  {successNote.noteHash}
+                <p className="font-mono break-all text-emerald-100" data-snapshot="dynamic">
+                    {successNote.noteString ?? successNote.noteHash}
                 </p>
               </div>
               <button
@@ -955,7 +1132,7 @@ const App = () => {
                 onClick={handleSaveSuccessNote}
                 className="w-full rounded-lg border border-emerald-300/40 bg-emerald-500/30 px-3 py-2 text-[11px] font-bold text-emerald-50 hover:bg-emerald-500/40"
               >
-                Save to storage
+                Save to storage & clipboard
               </button>
             </div>
           )}
@@ -963,8 +1140,11 @@ const App = () => {
       )}
 
       {noteSaved && (
-        <div className="fixed bottom-20 right-6 bg-emerald-500/10 border border-emerald-400/30 text-emerald-100 px-4 py-2 rounded-full text-xs">
-          Note saved to storage.
+        <div
+          className="fixed bottom-20 right-6 bg-emerald-500/10 border border-emerald-400/30 text-emerald-100 px-4 py-2 rounded-full text-xs"
+          data-snapshot="dynamic"
+        >
+          Note saved to storage & clipboard.
         </div>
       )}
 

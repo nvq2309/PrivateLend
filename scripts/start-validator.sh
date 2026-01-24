@@ -5,6 +5,8 @@
 
 set -e
 
+export COPYFILE_DISABLE="${COPYFILE_DISABLE:-1}"
+
 if [ "$1" == "--fork" ]; then
     echo "Starting local validator with devnet fork..."
     solana-test-validator \

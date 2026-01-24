@@ -54,4 +54,12 @@ pub enum VeilLendError {
     InvalidMerklePath,
     #[msg("Merkle tree depth mismatch")]
     MerkleDepthMismatch,
+    #[msg("Poseidon hash failed")]
+    PoseidonHashFailed,
+    #[msg("Missing Arcium client public key")]
+    ArciumClientKeyMissing,
+    #[msg("Arcium client public key mismatch")]
+    ArciumClientKeyMismatch,
+    #[msg("Invalid note access hash")]
+    InvalidNoteHash,
 }

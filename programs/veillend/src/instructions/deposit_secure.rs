@@ -2,12 +2,19 @@ use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::append_leaf;
 use crate::state::*;
 
 #[derive(Accounts)]
+#[instruction(
+    amount: u64,
+    encrypted_balance: [u8; 32],
+    client_pubkey: [u8; 32],
+    note_hash: [u8; 32],
+)]
 pub struct DepositSecure<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -22,11 +29,11 @@ pub struct DepositSecure<'info> {
     #[account(
         init_if_needed,
         payer = user,
-        space = 8 + UserReceipt::INIT_SPACE,
-        seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
+        space = 8 + NoteReceipt::INIT_SPACE,
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
         bump,
     )]
-    pub user_receipt: Box<Account<'info, UserReceipt>>,
+    pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(
         mut,
@@ -38,9 +45,9 @@ pub struct DepositSecure<'info> {
         init_if_needed,
         payer = user,
         associated_token::mint = receipt_mint,
-        associated_token::authority = user,
+        associated_token::authority = note_receipt,
     )]
-    pub user_receipt_token_account: Box<Account<'info, TokenAccount>>,
+    pub note_receipt_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -75,13 +82,21 @@ pub fn deposit_secure(
     amount: u64,
     encrypted_balance: [u8; 32],
     client_pubkey: [u8; 32],
+    note_hash: [u8; 32],
     commitment: [u8; 32],
 ) -> Result<()> {
     require!(!ctx.accounts.vault.is_paused, VeilLendError::VaultPaused);
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
-    let user_receipt = &mut ctx.accounts.user_receipt;
+    let note_receipt = &mut ctx.accounts.note_receipt;
+
+    if is_zero_pubkey(&client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if !is_zero_pubkey(&note_receipt.client_pubkey) && note_receipt.client_pubkey != client_pubkey {
+        return err!(VeilLendError::ArciumClientKeyMismatch);
+    }
 
     let shares_to_mint = if vault.total_shares == 0 || vault.total_collateral == 0 {
         amount
@@ -114,7 +129,7 @@ pub fn deposit_secure(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
             mint: ctx.accounts.receipt_mint.to_account_info(),
-            to: ctx.accounts.user_receipt_token_account.to_account_info(),
+            to: ctx.accounts.note_receipt_token_account.to_account_info(),
             authority: vault.to_account_info(),
         },
         signer_seeds,
@@ -130,24 +145,27 @@ pub fn deposit_secure(
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
 
-    if user_receipt.bump == 0 {
-        user_receipt.bump = ctx.bumps.user_receipt;
-        user_receipt.protection_tier = 0;
-        user_receipt.protection_expiry = 0;
-        user_receipt.last_update_timestamp = Clock::get()?.unix_timestamp;
+    if note_receipt.bump == 0 {
+        note_receipt.bump = ctx.bumps.note_receipt;
+        note_receipt.last_update_timestamp = Clock::get()?.unix_timestamp;
     }
-    user_receipt.owner = ctx.accounts.user.key();
-    user_receipt.vault = vault.key();
-    user_receipt.shares = user_receipt
+    if note_receipt.note_hash != [0u8; 32] && note_receipt.note_hash != note_hash {
+        return err!(VeilLendError::InvalidNoteHash);
+    }
+    note_receipt.note_hash = note_hash;
+    note_receipt.vault = vault.key();
+    note_receipt.shares = note_receipt
         .shares
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.deposited_collateral = user_receipt
+    note_receipt.deposited_collateral = note_receipt
         .deposited_collateral
         .checked_add(amount)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.encrypted_balance = encrypted_balance;
-    user_receipt.client_pubkey = client_pubkey;
+    note_receipt.encrypted_balance = encrypted_balance;
+    if is_zero_pubkey(&note_receipt.client_pubkey) {
+        note_receipt.client_pubkey = client_pubkey;
+    }
 
     require!(
         ctx.accounts.merkle_tree.vault == vault.key(),

@@ -9,6 +9,8 @@ import { x25519 } from '@arcium-hq/client';
 import type { ArciumEncryptionClient, CiphertextBundle } from './veillend';
 
 const ARCIUM_KEYPAIR_STORAGE_KEY = 'veillend.arcium.keypair';
+const ARCIUM_PUBLIC_KEY_STORAGE_KEY = 'veillend.arcium.public';
+const ARCIUM_PRIVATE_KEY_STORAGE_KEY = 'veillend.arcium.private';
 
 export interface ArciumKeypair {
   privateKey: Uint8Array;
@@ -68,14 +70,40 @@ export const generateArciumKeypair = (): ArciumKeypair => {
 
 export const loadArciumKeypair = (walletAddress: string): ArciumKeypair | null => {
   if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem(`${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`);
-  if (!raw) return null;
+  const publicKeyRaw = localStorage.getItem(`${ARCIUM_PUBLIC_KEY_STORAGE_KEY}:${walletAddress}`);
+  const privateKeyRaw = typeof sessionStorage === 'undefined'
+    ? null
+    : sessionStorage.getItem(`${ARCIUM_PRIVATE_KEY_STORAGE_KEY}:${walletAddress}`);
+
+  if (publicKeyRaw && privateKeyRaw) {
+    try {
+      return {
+        privateKey: fromHex(privateKeyRaw),
+        publicKey: fromHex(publicKeyRaw),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const legacyRaw = localStorage.getItem(`${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`);
+  if (!legacyRaw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    return {
-      privateKey: fromHex(parsed.privateKey),
-      publicKey: fromHex(parsed.publicKey),
-    };
+    const parsed = JSON.parse(legacyRaw);
+    const publicKey = fromHex(parsed.publicKey);
+    const privateKey = fromHex(parsed.privateKey);
+    localStorage.setItem(
+      `${ARCIUM_PUBLIC_KEY_STORAGE_KEY}:${walletAddress}`,
+      toHex(publicKey),
+    );
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(
+        `${ARCIUM_PRIVATE_KEY_STORAGE_KEY}:${walletAddress}`,
+        toHex(privateKey),
+      );
+    }
+    localStorage.removeItem(`${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`);
+    return { privateKey, publicKey };
   } catch {
     return null;
   }
@@ -86,12 +114,17 @@ export const saveArciumKeypair = (walletAddress: string, keypair: ArciumKeypair)
     throw new Error('localStorage unavailable');
   }
   localStorage.setItem(
-    `${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`,
-    JSON.stringify({
-      privateKey: toHex(keypair.privateKey),
-      publicKey: toHex(keypair.publicKey),
-    }),
+    `${ARCIUM_PUBLIC_KEY_STORAGE_KEY}:${walletAddress}`,
+    toHex(keypair.publicKey),
   );
+  if (typeof sessionStorage === 'undefined') {
+    throw new Error('sessionStorage unavailable');
+  }
+  sessionStorage.setItem(
+    `${ARCIUM_PRIVATE_KEY_STORAGE_KEY}:${walletAddress}`,
+    toHex(keypair.privateKey),
+  );
+  localStorage.removeItem(`${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`);
 };
 
 export const initializeArciumKeypair = (walletAddress: string): ArciumKeypair => {
@@ -99,13 +132,20 @@ export const initializeArciumKeypair = (walletAddress: string): ArciumKeypair =>
   if (existing) return existing;
 
   const keypair = generateArciumKeypair();
-  saveArciumKeypair(walletAddress, keypair);
+  try {
+    saveArciumKeypair(walletAddress, keypair);
+  } catch {
+  }
   return keypair;
 };
 
 export const clearArciumKeypair = (walletAddress: string): void => {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(`${ARCIUM_KEYPAIR_STORAGE_KEY}:${walletAddress}`);
+  localStorage.removeItem(`${ARCIUM_PUBLIC_KEY_STORAGE_KEY}:${walletAddress}`);
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(`${ARCIUM_PRIVATE_KEY_STORAGE_KEY}:${walletAddress}`);
+  }
 };
 
 /**

@@ -27,7 +27,19 @@ import {
 const CHAIN = process.env.CHAIN ?? 'localnet';
 const RPC_URL =
   process.env.SOLANA_RPC_URL ??
+  process.env.ANCHOR_PROVIDER_URL ??
+  process.env.VITE_SOLANA_RPC_URL ??
   (CHAIN === 'devnet' ? 'https://api.devnet.solana.com' : 'http://127.0.0.1:8899');
+
+const DEFAULT_SOL_DEPOSIT = CHAIN === 'devnet' ? 0.1 : 4;
+const SOL_DEPOSIT_OVERRIDE = process.env.DEPOSIT_SOL_AMOUNT ?? process.env.BOOTSTRAP_SOL_AMOUNT;
+const SOL_DEPOSIT_AMOUNT = Number.parseFloat(SOL_DEPOSIT_OVERRIDE ?? String(DEFAULT_SOL_DEPOSIT));
+const bootstrapUsdcEnv = process.env.BOOTSTRAP_USDC;
+const SHOULD_BOOTSTRAP_USDC = bootstrapUsdcEnv ? bootstrapUsdcEnv === 'true' : true;
+
+if (!Number.isFinite(SOL_DEPOSIT_AMOUNT) || SOL_DEPOSIT_AMOUNT <= 0) {
+  throw new Error('Invalid SOL deposit amount. Set DEPOSIT_SOL_AMOUNT or BOOTSTRAP_SOL_AMOUNT.');
+}
 
 const DEPLOYER_KEYPAIR =
   process.env.DEPLOYER_KEYPAIR ?? process.env.ANCHOR_WALLET ?? '';
@@ -102,11 +114,12 @@ const run = async () => {
   const idl = loadIdl();
   const programId = getProgramId(idl);
   idl.address = programId.toBase58();
-  await ensureProgramDeployed(connection, programId);
-  const program = new anchor.Program(idl, provider);
 
   console.log(`[bootstrap] chain=${CHAIN} rpc=${RPC_URL}`);
   console.log(`[bootstrap] program=${programId.toBase58()}`);
+
+  await ensureProgramDeployed(connection, programId);
+  const program = new anchor.Program(idl, provider);
 
   await maybeAirdrop(connection, deployer.publicKey, 5, 'DEPLOYER');
   await maybeAirdrop(connection, publicWalletPubkey, 2, 'PUBLIC_WALLET');
@@ -141,6 +154,10 @@ const run = async () => {
   );
   const [userReceipt] = PublicKey.findProgramAddressSync(
     [Buffer.from('user_receipt'), vault.toBuffer(), deployer.publicKey.toBuffer()],
+    programId,
+  );
+  const [merkleTree] = PublicKey.findProgramAddressSync(
+    [Buffer.from('merkle_tree'), vault.toBuffer()],
     programId,
   );
 
@@ -204,6 +221,18 @@ const run = async () => {
       .rpc();
   });
 
+  await maybeInitialize('merkle-tree', async () => {
+    await program.methods
+      .initializeMerkleTree()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault,
+        merkleTree,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+  });
+
   const deployerCollateralAta = getAssociatedTokenAddressSync(
     collateralMint,
     deployer.publicKey,
@@ -221,7 +250,7 @@ const run = async () => {
     );
   }
 
-  const depositAmount = 4 * LAMPORTS_PER_SOL;
+  const depositAmount = Math.floor(SOL_DEPOSIT_AMOUNT * LAMPORTS_PER_SOL);
   setupInstructions.push(
     SystemProgram.transfer({
       fromPubkey: deployer.publicKey,
@@ -262,7 +291,12 @@ const run = async () => {
     })
     .rpc();
 
-  console.log(`[deposit] 4 SOL (tokenized) into vault: ${depositSignature}`);
+  console.log(`[deposit] ${SOL_DEPOSIT_AMOUNT} SOL (tokenized) into vault: ${depositSignature}`);
+
+  if (!SHOULD_BOOTSTRAP_USDC) {
+    console.log('[bootstrap] Skipping USDC vault bootstrap (devnet default).');
+    return;
+  }
 
   const usdcMint = await createMint(
     connection,
@@ -298,6 +332,10 @@ const run = async () => {
   );
   const [usdcUserReceipt] = PublicKey.findProgramAddressSync(
     [Buffer.from('user_receipt'), usdcVault.toBuffer(), deployer.publicKey.toBuffer()],
+    programId,
+  );
+  const [usdcMerkleTree] = PublicKey.findProgramAddressSync(
+    [Buffer.from('merkle_tree'), usdcVault.toBuffer()],
     programId,
   );
 
@@ -343,6 +381,18 @@ const run = async () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+  });
+
+  await maybeInitialize('usdc-merkle-tree', async () => {
+    await program.methods
+      .initializeMerkleTree()
+      .accountsStrict({
+        authority: deployer.publicKey,
+        vault: usdcVault,
+        merkleTree: usdcMerkleTree,
+        systemProgram: SystemProgram.programId,
       })
       .rpc();
   });
@@ -416,7 +466,7 @@ const run = async () => {
   console.log('[verify] Vault balances OK');
   console.log(`- SOL Vault: ${vault.toBase58()}`);
   console.log(`- Collateral mint (wSOL): ${collateralMint.toBase58()}`);
-  console.log(`- SOL Vault collateral: ${vaultCollateralBalance.amount} (4 SOL)`);
+  console.log(`- SOL Vault collateral: ${vaultCollateralBalance.amount} (${SOL_DEPOSIT_AMOUNT} SOL)`);
   console.log(`- USDC Vault: ${usdcVault.toBase58()}`);
   console.log(`- USDC mint: ${usdcMint.toBase58()}`);
   console.log(`- USDC Vault collateral: ${usdcVaultBalance.amount} (10,000 USDC)`);

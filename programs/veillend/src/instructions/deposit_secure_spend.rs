@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, spend_note};
@@ -14,6 +15,7 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
 )]
 pub struct DepositSecureSpend<'info> {
     #[account(mut)]
@@ -28,11 +30,10 @@ pub struct DepositSecureSpend<'info> {
 
     #[account(
         mut,
-        seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
-        bump = user_receipt.bump,
-        constraint = user_receipt.owner == user.key(),
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        bump = note_receipt.bump,
     )]
-    pub user_receipt: Box<Account<'info, UserReceipt>>,
+    pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(
         mut,
@@ -44,9 +45,9 @@ pub struct DepositSecureSpend<'info> {
         init_if_needed,
         payer = user,
         associated_token::mint = receipt_mint,
-        associated_token::authority = user,
+        associated_token::authority = note_receipt,
     )]
-    pub user_receipt_token_account: Box<Account<'info, TokenAccount>>,
+    pub note_receipt_token_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -92,6 +93,7 @@ pub fn deposit_secure_spend(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -99,7 +101,14 @@ pub fn deposit_secure_spend(
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
-    let user_receipt = &mut ctx.accounts.user_receipt;
+    let note_receipt = &mut ctx.accounts.note_receipt;
+
+    if is_zero_pubkey(&note_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if note_receipt.note_hash != note_hash {
+        return err!(VeilLendError::InvalidNoteHash);
+    }
 
     let shares_to_mint = if vault.total_shares == 0 || vault.total_collateral == 0 {
         amount
@@ -132,7 +141,7 @@ pub fn deposit_secure_spend(
         ctx.accounts.token_program.to_account_info(),
         MintTo {
             mint: ctx.accounts.receipt_mint.to_account_info(),
-            to: ctx.accounts.user_receipt_token_account.to_account_info(),
+            to: ctx.accounts.note_receipt_token_account.to_account_info(),
             authority: vault.to_account_info(),
         },
         signer_seeds,
@@ -148,15 +157,15 @@ pub fn deposit_secure_spend(
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
 
-    user_receipt.shares = user_receipt
+    note_receipt.shares = note_receipt
         .shares
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.deposited_collateral = user_receipt
+    note_receipt.deposited_collateral = note_receipt
         .deposited_collateral
         .checked_add(amount)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.encrypted_balance = encrypted_balance;
+    note_receipt.encrypted_balance = encrypted_balance;
 
     require!(
         ctx.accounts.merkle_tree.vault == vault.key(),

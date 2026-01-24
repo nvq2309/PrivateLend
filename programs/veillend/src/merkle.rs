@@ -1,31 +1,33 @@
 use anchor_lang::prelude::*;
-use solana_sha256_hasher::hashv;
+use solana_poseidon::{hashv, Endianness, Parameters};
 
 use crate::constants::MERKLE_TREE_DEPTH;
 use crate::errors::VeilLendError;
 use crate::state::{MerkleTree, Nullifier};
 
-fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let hash = hashv(&[left, right]);
-    hash.to_bytes()
+fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> Result<[u8; 32]> {
+    let hash = hashv(Parameters::Bn254X5, Endianness::BigEndian, &[left, right])
+        .map_err(|_| VeilLendError::PoseidonHashFailed)?;
+    Ok(hash.to_bytes())
 }
 
-fn compute_zero_hashes(depth: usize) -> Vec<[u8; 32]> {
+fn compute_zero_hashes(depth: usize) -> Result<Vec<[u8; 32]>> {
     let mut hashes = Vec::with_capacity(depth + 1);
     hashes.push([0u8; 32]);
     for i in 0..depth {
-        let next = hash_pair(&hashes[i], &hashes[i]);
+        let next = hash_pair(&hashes[i], &hashes[i])?;
         hashes.push(next);
     }
-    hashes
+    Ok(hashes)
 }
 
-pub fn initialize_merkle_tree(tree: &mut MerkleTree) {
-    let zeros = compute_zero_hashes(MERKLE_TREE_DEPTH);
+pub fn initialize_merkle_tree(tree: &mut MerkleTree) -> Result<()> {
+    let zeros = compute_zero_hashes(MERKLE_TREE_DEPTH)?;
     tree.depth = MERKLE_TREE_DEPTH as u8;
     tree.root = zeros[MERKLE_TREE_DEPTH];
     tree.next_index = 0;
     tree.filled_subtrees = [[0u8; 32]; MERKLE_TREE_DEPTH];
+    Ok(())
 }
 
 pub fn append_leaf(tree: &mut MerkleTree, leaf: [u8; 32]) -> Result<u32> {
@@ -39,17 +41,17 @@ pub fn append_leaf(tree: &mut MerkleTree, leaf: [u8; 32]) -> Result<u32> {
         return err!(VeilLendError::MerkleTreeFull);
     }
 
-    let zeros = compute_zero_hashes(depth);
+    let zeros = compute_zero_hashes(depth)?;
     let mut index = current_index;
     let mut current = leaf;
 
     for level in 0..depth {
         if index % 2 == 0 {
             tree.filled_subtrees[level] = current;
-            current = hash_pair(&current, &zeros[level]);
+            current = hash_pair(&current, &zeros[level])?;
         } else {
             let left = tree.filled_subtrees[level];
-            current = hash_pair(&left, &current);
+            current = hash_pair(&left, &current)?;
         }
         index /= 2;
     }
@@ -76,8 +78,8 @@ pub fn verify_merkle_proof(
     let mut current = leaf;
     for (sibling, direction) in proof.iter().zip(path.iter()) {
         current = match direction {
-            0 => hash_pair(&current, sibling),
-            1 => hash_pair(sibling, &current),
+            0 => hash_pair(&current, sibling)?,
+            1 => hash_pair(sibling, &current)?,
             _ => return err!(VeilLendError::InvalidMerklePath),
         };
     }

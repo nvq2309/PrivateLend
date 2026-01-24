@@ -1,18 +1,26 @@
 export type LendingMode = 'FAST' | 'SECURE';
 
+export type ActionResult = {
+  signature: string;
+  proof?: {
+    proof: unknown;
+    publicSignals: string[];
+  };
+};
+
 export type LendingAdapter = {
   mode: LendingMode;
-  supply: (amount: number) => Promise<string>;
-  withdraw: (amount: number) => Promise<string>;
-  borrow: (amount: number) => Promise<string>;
-  repay: (amount: number) => Promise<string>;
+  supply: (amount: number) => Promise<ActionResult>;
+  withdraw: (amount: number) => Promise<ActionResult>;
+  borrow: (amount: number) => Promise<ActionResult>;
+  repay: (amount: number) => Promise<ActionResult>;
 };
 
 type FastAdapterDeps = {
-  deposit: (amount: number) => Promise<string>;
-  withdraw: (amount: number) => Promise<string>;
-  borrow: (amount: number) => Promise<string>;
-  repay: (amount: number) => Promise<string>;
+  deposit: (amount: number) => Promise<ActionResult>;
+  withdraw: (amount: number) => Promise<ActionResult>;
+  borrow: (amount: number) => Promise<ActionResult>;
+  repay: (amount: number) => Promise<ActionResult>;
 };
 
 export const createFastAdapter = (deps: FastAdapterDeps): LendingAdapter => ({

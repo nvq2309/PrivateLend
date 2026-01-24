@@ -1,7 +1,7 @@
-use anchor_lang::prelude::*;
 use crate::constants::*;
 use crate::merkle::initialize_merkle_tree as init_tree;
 use crate::state::*;
+use anchor_lang::prelude::*;
 
 #[derive(Accounts)]
 pub struct InitializeMerkleTree<'info> {
@@ -29,7 +29,7 @@ pub fn initialize_merkle_tree(ctx: Context<InitializeMerkleTree>) -> Result<()> 
     let tree = &mut ctx.accounts.merkle_tree;
     tree.vault = ctx.accounts.vault.key();
     tree.bump = ctx.bumps.merkle_tree;
-    init_tree(tree);
+    init_tree(tree)?;
 
     emit!(MerkleTreeInitializedEvent {
         vault: tree.vault,

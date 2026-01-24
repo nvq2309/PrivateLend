@@ -76,11 +76,12 @@ We want:
 - **Receipts**: user holds proof of claim (vault shares).
 - Optional: onchain commitments for receipts; offchain mapping kept minimal and encrypted.
 
-### Merkle tree + nullifiers (demo implementation)
+### Merkle tree + nullifiers (ZK implementation)
 - A per-vault on-chain Merkle tree stores commitments for secure notes.
 - Each SECURE action verifies a Merkle path for the current commitment and records a nullifier PDA to prevent double-spend.
+- Proofs are real ZK proofs (no demo placeholders).
 - The action appends a new commitment, creating the next note state for the user.
-- Limitation (demo): transactions are still signed by the user wallet; a relayer/stealth-address layer is required to fully unlink on-chain identities.
+- Limitation: transactions are still signed by the user wallet; a relayer/stealth-address layer is required to fully unlink on-chain identities.
 
 ## 7) Liquidation mitigation (inspired, not copied)
 ### Fluid inspiration (ticks)
@@ -146,11 +147,11 @@ These acceptance tests extend the original MVP tests by adding a deterministic *
 
 ### 13.2 Notes + privacy modes (FAST vs SECURE)
 6. Supply (FAST): user supplies SOL/USDC via the UI in FAST mode (no privacy) and the order is routed directly to the underlying lending market.
-7. Supply (SECURE): user supplies SOL/USDC via the UI in SECURE mode; the app generates a **secret ownership proof** for the user’s position and returns a **note**. User can click “Save to storage” to persist the note to **LOCAL_STORAGE**.
+7. Supply (SECURE): user supplies SOL/USDC via the UI in SECURE mode; the app generates a **real ZK proof** for the user’s position and returns a **note string** (`veil-note-v1:<hex>`). User can click “Save to storage” to persist the note to **LOCAL_STORAGE**.
 8. Note uniqueness rule: each wallet has exactly **one active note**; the seed to derive the next note hash is:
    - `seed = timestamp + walletAddress + lastTxnId` where `lastTxnId = 0` if this is the initial note.
 9. Borrow/Repay/Withdraw parity: Borrow, Repay, and Withdraw each support both FAST and SECURE modes with the same note/proof flow as Supply.
-9b. SECURE actions must update the on-chain Merkle tree and create a nullifier PDA to prevent note reuse.
+9b. SECURE actions must update the on-chain Merkle tree, validate ZK proofs, and create a nullifier PDA to prevent note reuse.
 
 ### 13.3 Portfolio UX
 10. Portfolio requires note: on Portfolio page, if no note exists in LOCAL_STORAGE, the user must (a) input an existing note, or (b) create an initial note (guided flow). Once a note exists, positions are displayed and interactive.

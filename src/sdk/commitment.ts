@@ -43,6 +43,8 @@ export const concat = (...arrays: Uint8Array[]): Uint8Array => {
   return result;
 };
 
+import { bigintToBytesBE, bytesToBigIntBE, poseidonHash } from './poseidon';
+
 export const bigintToBytes = (value: bigint, length: number): Uint8Array => {
   const bytes = new Uint8Array(length);
   let temp = value;
@@ -62,6 +64,11 @@ export interface PrivacyNoteV2 {
   vaultAddress: string;
   depositAmount: string;
   borrowAmount: string;
+  collateralSymbol?: 'SOL' | 'USDC';
+  supplySol?: string;
+  supplyUsdc?: string;
+  borrowSol?: string;
+  borrowUsdc?: string;
   noteIndex: number;
   createdAt: number;
   spent: boolean;
@@ -72,6 +79,11 @@ export interface NoteSecrets {
   blindingFactor: Uint8Array;
   spendingKey: Uint8Array;
 }
+
+export type NoteSecretsPayload = {
+  blindingFactor: string;
+  spendingKey: string;
+};
 
 const PRIVACY_NOTE_STORAGE_PREFIX = 'veillend.privacy_note.v2';
 const SECRETS_STORAGE_PREFIX = 'veillend.secrets';
@@ -86,33 +98,79 @@ export const generateBlindingFactor = (): Uint8Array => {
   return crypto.getRandomValues(new Uint8Array(32));
 };
 
+export const generateNullifier = (): Uint8Array => {
+  return crypto.getRandomValues(new Uint8Array(32));
+};
+
 export const generateSpendingKey = (): Uint8Array => {
   return crypto.getRandomValues(new Uint8Array(32));
 };
 
 export const computeCommitment = async (params: {
-  depositAmount: bigint;
-  borrowAmount: bigint;
-  blindingFactor: Uint8Array;
-  ownerPubkey: Uint8Array;
+  nullifier: Uint8Array;
+  secret: Uint8Array;
+  supplySol: bigint;
+  supplyUsdc: bigint;
+  borrowSol: bigint;
+  borrowUsdc: bigint;
+  timestamp: bigint;
 }): Promise<string> => {
-  const depositBytes = bigintToBytes(params.depositAmount, 8);
-  const borrowBytes = bigintToBytes(params.borrowAmount, 8);
-  const data = concat(depositBytes, borrowBytes, params.blindingFactor, params.ownerPubkey);
-  const hash = await sha256(data);
-  return toHex(hash);
+  const hash = await poseidonHash([
+    bytesToBigIntBE(params.nullifier),
+    bytesToBigIntBE(params.secret),
+    params.supplySol,
+    params.supplyUsdc,
+    params.borrowSol,
+    params.borrowUsdc,
+    params.timestamp,
+  ]);
+  return toHex(bigintToBytesBE(hash, 32));
 };
 
-export const computeNullifier = async (params: {
-  spendingKey: Uint8Array;
-  noteIndex: number;
-  commitment: string;
-}): Promise<string> => {
-  const indexBytes = bigintToBytes(BigInt(params.noteIndex), 4);
-  const commitmentBytes = fromHex(params.commitment);
-  const data = concat(params.spendingKey, indexBytes, commitmentBytes);
-  const hash = await sha256(data);
-  return toHex(hash);
+export const computeNullifierHash = async (nullifier: Uint8Array): Promise<string> => {
+  const hash = await poseidonHash([bytesToBigIntBE(nullifier)]);
+  return toHex(bigintToBytesBE(hash, 32));
+};
+
+export const resolveNoteAmounts = (
+  note: PrivacyNoteV2,
+  collateralSymbol: 'SOL' | 'USDC' = 'SOL',
+): {
+  supplySol: bigint;
+  supplyUsdc: bigint;
+  borrowSol: bigint;
+  borrowUsdc: bigint;
+  timestamp: bigint;
+} => {
+  const supplySol = note.supplySol ? BigInt(note.supplySol) : undefined;
+  const supplyUsdc = note.supplyUsdc ? BigInt(note.supplyUsdc) : undefined;
+  const borrowSol = note.borrowSol ? BigInt(note.borrowSol) : undefined;
+  const borrowUsdc = note.borrowUsdc ? BigInt(note.borrowUsdc) : undefined;
+  if (
+    supplySol !== undefined
+    && supplyUsdc !== undefined
+    && borrowSol !== undefined
+    && borrowUsdc !== undefined
+  ) {
+    return {
+      supplySol,
+      supplyUsdc,
+      borrowSol,
+      borrowUsdc,
+      timestamp: BigInt(note.createdAt),
+    };
+  }
+
+  const deposit = BigInt(note.depositAmount);
+  const borrow = BigInt(note.borrowAmount);
+  const symbol = note.collateralSymbol ?? collateralSymbol;
+  return {
+    supplySol: symbol === 'SOL' ? deposit : 0n,
+    supplyUsdc: symbol === 'USDC' ? deposit : 0n,
+    borrowSol: symbol === 'USDC' ? borrow : 0n,
+    borrowUsdc: symbol === 'SOL' ? borrow : 0n,
+    timestamp: BigInt(note.createdAt),
+  };
 };
 
 export const initializeSecrets = (walletAddress: string): NoteSecrets => {
@@ -168,6 +226,23 @@ export const loadSecrets = (walletAddress: string): NoteSecrets | null => {
   }
 };
 
+export const saveSecrets = (
+  walletAddress: string,
+  secrets: NoteSecrets | NoteSecretsPayload,
+): void => {
+  if (typeof localStorage === 'undefined') return;
+  const isPayload = (input: NoteSecrets | NoteSecretsPayload): input is NoteSecretsPayload =>
+    typeof input.blindingFactor === 'string';
+
+  const payload = isPayload(secrets)
+    ? secrets
+    : {
+        blindingFactor: toHex(secrets.blindingFactor),
+        spendingKey: toHex(secrets.spendingKey),
+      };
+  localStorage.setItem(secretsKeyForWallet(walletAddress), JSON.stringify(payload));
+};
+
 export const createPrivacyNote = async (params: {
   walletAddress: string;
   ownerPubkey: Uint8Array;
@@ -175,47 +250,61 @@ export const createPrivacyNote = async (params: {
   depositAmount: bigint;
   borrowAmount: bigint;
   noteIndex: number;
+  collateralSymbol?: 'SOL' | 'USDC';
 }): Promise<PrivacyNoteV2> => {
-  const secrets = initializeSecrets(params.walletAddress);
-  const blindingFactor = generateBlindingFactor();
+  initializeSecrets(params.walletAddress);
+  const nullifier = generateNullifier();
+  const secret = generateBlindingFactor();
+  const timestamp = Date.now();
+  const symbol = params.collateralSymbol ?? 'SOL';
+  const supplySol = symbol === 'SOL' ? params.depositAmount : 0n;
+  const supplyUsdc = symbol === 'USDC' ? params.depositAmount : 0n;
+  const borrowSol = symbol === 'USDC' ? params.borrowAmount : 0n;
+  const borrowUsdc = symbol === 'SOL' ? params.borrowAmount : 0n;
 
   const commitment = await computeCommitment({
-    depositAmount: params.depositAmount,
-    borrowAmount: params.borrowAmount,
-    blindingFactor,
-    ownerPubkey: params.ownerPubkey,
-  });
-
-  const nullifier = await computeNullifier({
-    spendingKey: secrets.spendingKey,
-    noteIndex: params.noteIndex,
-    commitment,
+    nullifier,
+    secret,
+    supplySol,
+    supplyUsdc,
+    borrowSol,
+    borrowUsdc,
+    timestamp: BigInt(timestamp),
   });
 
   return {
     version: 2,
     commitment,
-    nullifier,
-    blindingFactor: toHex(blindingFactor),
+    nullifier: toHex(nullifier),
+    blindingFactor: toHex(secret),
     ownerPubkey: toHex(params.ownerPubkey),
     vaultAddress: params.vaultAddress,
     depositAmount: params.depositAmount.toString(),
     borrowAmount: params.borrowAmount.toString(),
+    collateralSymbol: symbol,
+    supplySol: supplySol.toString(),
+    supplyUsdc: supplyUsdc.toString(),
+    borrowSol: borrowSol.toString(),
+    borrowUsdc: borrowUsdc.toString(),
     noteIndex: params.noteIndex,
-    createdAt: Date.now(),
+    createdAt: timestamp,
     spent: false,
   };
 };
 
 export const verifyNoteOwnership = async (
   note: PrivacyNoteV2,
-  ownerPubkey: Uint8Array,
+  collateralSymbol: 'SOL' | 'USDC' = 'SOL',
 ): Promise<boolean> => {
+  const resolved = resolveNoteAmounts(note, collateralSymbol);
   const recomputedCommitment = await computeCommitment({
-    depositAmount: BigInt(note.depositAmount),
-    borrowAmount: BigInt(note.borrowAmount),
-    blindingFactor: fromHex(note.blindingFactor),
-    ownerPubkey,
+    nullifier: fromHex(note.nullifier),
+    secret: fromHex(note.blindingFactor),
+    supplySol: resolved.supplySol,
+    supplyUsdc: resolved.supplyUsdc,
+    borrowSol: resolved.borrowSol,
+    borrowUsdc: resolved.borrowUsdc,
+    timestamp: resolved.timestamp,
   });
 
   return recomputedCommitment === note.commitment;
@@ -244,6 +333,11 @@ export const savePrivacyNote = (walletAddress: string, note: PrivacyNoteV2): voi
   const existing = loadPrivacyNotes(walletAddress);
   const updated = [...existing, note];
   localStorage.setItem(storageKeyForWallet(walletAddress), JSON.stringify(updated));
+};
+
+export const savePrivacyNotes = (walletAddress: string, notes: PrivacyNoteV2[]): void => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(storageKeyForWallet(walletAddress), JSON.stringify(notes));
 };
 
 export const markNoteSpent = (
@@ -282,12 +376,21 @@ export const getNextNoteIndex = (walletAddress: string): number => {
   return Math.max(...notes.map((n) => n.noteIndex)) + 1;
 };
 
+export const getAggregatedNotes = (
+  walletAddress: string,
+  vaultAddress?: string,
+): PrivacyNoteV2[] => {
+  const allNotes = loadPrivacyNotes(walletAddress);
+  if (!vaultAddress) return allNotes;
+  return allNotes.filter((note) => note.vaultAddress === vaultAddress);
+};
+
 export const getTotalBalance = (
   walletAddress: string,
   vaultAddress?: string,
 ): { deposit: bigint; borrow: bigint } => {
-  const unspent = getUnspentNotes(walletAddress, vaultAddress);
-  return unspent.reduce(
+  const aggregated = getAggregatedNotes(walletAddress, vaultAddress);
+  return aggregated.reduce(
     (acc, note) => ({
       deposit: acc.deposit + BigInt(note.depositAmount),
       borrow: acc.borrow + BigInt(note.borrowAmount),
@@ -300,4 +403,27 @@ export const clearPrivacyNotes = (walletAddress: string): void => {
   if (typeof localStorage === 'undefined') return;
   localStorage.removeItem(storageKeyForWallet(walletAddress));
   localStorage.removeItem(secretsKeyForWallet(walletAddress));
+};
+
+export const importPrivacyState = (
+  sourceWalletAddress: string,
+  targetWalletAddress: string,
+): { copiedNotes: boolean; copiedSecrets: boolean } => {
+  if (typeof localStorage === 'undefined') {
+    return { copiedNotes: false, copiedSecrets: false };
+  }
+
+  const notes = loadPrivacyNotes(sourceWalletAddress);
+  const copiedNotes = notes.length > 0;
+  if (copiedNotes) {
+    localStorage.setItem(storageKeyForWallet(targetWalletAddress), JSON.stringify(notes));
+  }
+
+  const secrets = localStorage.getItem(secretsKeyForWallet(sourceWalletAddress));
+  const copiedSecrets = Boolean(secrets);
+  if (secrets) {
+    localStorage.setItem(secretsKeyForWallet(targetWalletAddress), secrets);
+  }
+
+  return { copiedNotes, copiedSecrets };
 };

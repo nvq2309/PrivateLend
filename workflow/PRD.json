@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "product": "VeilLend",
+    "version": "zk-rewrite-v1",
+    "source": "workflow/PRD.md"
+  },
+  "globals": {
+    "ltv": 0.7,
+    "interest": 0,
+    "note_format": "veil-note-v1:<hex>",
+    "one_active_note": true
+  },
+  "requirements": [
+    "SECURE actions require ZK proof",
+    "Merkle tree stores commitments",
+    "Nullifier prevents double spend",
+    "UI positions from verified note state"
+  ]
+}

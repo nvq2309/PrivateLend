@@ -1,14 +1,14 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Token, TokenAccount, Mint};
+use anchor_spl::token::{Mint, Token, TokenAccount};
 
-use crate::state::*;
 use crate::constants::*;
+use crate::state::*;
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    
+
     #[account(
         init,
         payer = authority,
@@ -17,7 +17,7 @@ pub struct Initialize<'info> {
         bump,
     )]
     pub vault: Box<Account<'info, Vault>>,
-    
+
     #[account(
         init,
         payer = authority,
@@ -27,7 +27,7 @@ pub struct Initialize<'info> {
         bump,
     )]
     pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
-    
+
     pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -50,7 +50,7 @@ pub fn initialize(
     vault.liquidation_threshold_bps = liquidation_threshold_bps;
     vault.is_paused = false;
     vault.bump = ctx.bumps.vault;
-    
+
     emit!(VaultInitializedEvent {
         vault: vault.key(),
         authority: ctx.accounts.authority.key(),
@@ -58,7 +58,7 @@ pub fn initialize(
         ltv_bps,
         liquidation_threshold_bps,
     });
-    
+
     Ok(())
 }
 

@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
-use kamino_lend::cpi::{borrow_obligation_liquidity, refresh_obligation, refresh_reserve};
 use kamino_lend::cpi::accounts::{BorrowObligationLiquidity, RefreshObligation, RefreshReserve};
+use kamino_lend::cpi::{borrow_obligation_liquidity, refresh_obligation, refresh_reserve};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, verify_merkle_proof};
@@ -15,6 +16,7 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
 )]
 pub struct BorrowSecure<'info> {
     #[account(mut)]
@@ -29,11 +31,10 @@ pub struct BorrowSecure<'info> {
 
     #[account(
         mut,
-        seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
-        bump = user_receipt.bump,
-        constraint = user_receipt.owner == user.key(),
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        bump = note_receipt.bump,
     )]
-    pub user_receipt: Box<Account<'info, UserReceipt>>,
+    pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(mut)]
     pub user_borrow_account: Box<Account<'info, TokenAccount>>,
@@ -113,6 +114,7 @@ pub fn borrow_secure(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -121,16 +123,24 @@ pub fn borrow_secure(
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
-    let user_receipt = &mut ctx.accounts.user_receipt;
+    let note_receipt = &mut ctx.accounts.note_receipt;
 
-    let max_borrow = user_receipt
+    if is_zero_pubkey(&note_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if note_receipt.note_hash != note_hash {
+        return err!(VeilLendError::InvalidNoteHash);
+    }
+
+    let ltv_bps = vault.ltv_bps.min(MAX_LTV_BPS);
+    let max_borrow = note_receipt
         .deposited_collateral
-        .checked_mul(MAX_LTV_BPS)
+        .checked_mul(ltv_bps)
         .ok_or(VeilLendError::MathOverflow)?
         .checked_div(BPS_DENOMINATOR)
         .ok_or(VeilLendError::MathOverflow)?;
 
-    let new_total_borrow = user_receipt
+    let new_total_borrow = note_receipt
         .borrowed_amount
         .checked_add(amount)
         .ok_or(VeilLendError::MathOverflow)?;
@@ -244,8 +254,8 @@ pub fn borrow_secure(
         .total_borrowed
         .checked_add(amount)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.borrowed_amount = new_total_borrow;
-    user_receipt.encrypted_balance = encrypted_balance;
+    note_receipt.borrowed_amount = new_total_borrow;
+    note_receipt.encrypted_balance = encrypted_balance;
 
     emit!(BorrowSecureEvent {
         vault: vault.key(),

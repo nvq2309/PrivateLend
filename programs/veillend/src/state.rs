@@ -1,13 +1,13 @@
-use anchor_lang::prelude::*;
 use crate::constants::MERKLE_TREE_DEPTH;
+use anchor_lang::prelude::*;
 #[account]
 pub struct Vault {
     pub authority: Pubkey,
     pub collateral_mint: Pubkey,
-    pub receipt_mint: Pubkey,           // from main
-    pub borrow_mint: Pubkey,            // from main
+    pub receipt_mint: Pubkey, // from main
+    pub borrow_mint: Pubkey,  // from main
     pub total_collateral: u64,
-    pub total_borrowed: u64,            // from PR#2
+    pub total_borrowed: u64, // from PR#2
     pub total_shares: u64,
     pub ltv_bps: u64,                   // from PR#2
     pub liquidation_threshold_bps: u64, // from PR#2
@@ -40,6 +40,24 @@ pub struct UserReceipt {
 
 impl UserReceipt {
     pub const INIT_SPACE: usize = 32 + 32 + 8 + 8 + 8 + 32 + 32 + 1 + 8 + 8 + 1 + 32;
+}
+
+#[account]
+pub struct NoteReceipt {
+    pub note_hash: [u8; 32],
+    pub vault: Pubkey,
+    pub shares: u64,
+    pub deposited_collateral: u64,
+    pub borrowed_amount: u64,
+    pub encrypted_balance: [u8; 32],
+    pub client_pubkey: [u8; 32],
+    pub last_update_timestamp: i64,
+    pub bump: u8,
+    pub reserved: [u8; 32],
+}
+
+impl NoteReceipt {
+    pub const INIT_SPACE: usize = 32 + 32 + 8 + 8 + 8 + 32 + 32 + 8 + 1 + 32;
 }
 
 // Add ProtectionPool from PR#2

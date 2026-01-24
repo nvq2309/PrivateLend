@@ -7,6 +7,8 @@ import {
   SYSVAR_RENT_PUBKEY,
   Transaction,
   TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
 } from '@solana/web3.js';
 import BN from 'bn.js';
 import * as borsh from '@coral-xyz/borsh';
@@ -37,7 +39,7 @@ import {
   rotateNoteRecord,
   saveNoteRecord,
 } from '../sdk/notes';
-import { createFastAdapter } from '../sdk/adapter';
+import { type ActionResult, createFastAdapter } from '../sdk/adapter';
 import {
   type ArciumKeypair,
   createArciumClient,
@@ -50,6 +52,7 @@ import {
   type PrivacyNoteV2,
   createPrivacyNote,
   getNextNoteIndex,
+  getTotalBalance,
   getUnspentNotes,
   loadPrivacyNotes,
   loadSecrets,
@@ -58,6 +61,8 @@ import {
 } from '../sdk/commitment';
 import { fromHex, toHex } from '../sdk/commitment';
 import { getMerkleProof } from '../sdk/merkle';
+import { buildZkInputs } from '../sdk/zkInputs';
+import { generateZkProof } from '../sdk/zkProof';
 import {
   type SpendProof,
   generateSpendProof,
@@ -83,15 +88,7 @@ export interface VaultStats {
   liquidationThreshold: number;
 }
 
-export interface ProtectionPoolStats {
-  reserveBalance: number;
-  totalCoverage: number;
-  totalSubscribers: number;
-  totalExecutions: number;
-  totalPremiumCollected: number;
-  totalProtectionPaid: number;
-}
-
+const BORROW_LIMIT_BPS = 7000;
 const IDL_INSTRUCTIONS = (idlJson as any).instructions ?? [];
 const getDiscriminator = (name: string) => {
   const ix = IDL_INSTRUCTIONS.find((entry: any) => entry.name === name);
@@ -131,6 +128,7 @@ const depositSecureLayout = borsh.struct([
   borsh.u64('amount'),
   borsh.array(borsh.u8(), 32, 'encrypted_balance'),
   borsh.array(borsh.u8(), 32, 'client_pubkey'),
+  borsh.array(borsh.u8(), 32, 'note_hash'),
   borsh.array(borsh.u8(), 32, 'commitment'),
 ]);
 
@@ -140,6 +138,7 @@ const secureSpendLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'current_commitment'),
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
+  borsh.array(borsh.u8(), 32, 'note_hash'),
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
 ]);
@@ -150,6 +149,7 @@ const withdrawSecureLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'current_commitment'),
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
+  borsh.array(borsh.u8(), 32, 'note_hash'),
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
 ]);
@@ -208,6 +208,8 @@ const encodeInstruction = (name: string, args?: Record<string, any>) => {
     }
     case 'execute_protection':
       return Buffer.from(getDiscriminator(name));
+    case 'initialize_merkle_tree':
+      return Buffer.from(getDiscriminator(name));
     default:
       throw new Error(`Unsupported instruction: ${name}`);
   }
@@ -243,18 +245,6 @@ const userReceiptLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'reserved'),
 ]);
 
-const protectionPoolLayout = borsh.struct([
-  borsh.publicKey('vault'),
-  borsh.u64('reserve_balance'),
-  borsh.u64('total_coverage'),
-  borsh.u64('total_subscribers'),
-  borsh.u64('total_executions'),
-  borsh.u64('total_premium_collected'),
-  borsh.u64('total_protection_paid'),
-  borsh.u8('bump'),
-  borsh.array(borsh.u8(), 16, 'reserve_padding'),
-]);
-
 const MERKLE_TREE_SEED = 'merkle_tree';
 const MERKLE_TREE_DEPTH = 8;
 const E2E_TEST_MODE = isE2e();
@@ -279,6 +269,10 @@ const toNumber = (value: BN | number | bigint | null | undefined) => {
 const randomBytes32 = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
 const buildE2eSignature = () =>
   `e2e_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`;
+const buildE2eProof = (signature: string) => ({
+  proof: { protocol: 'e2e' },
+  publicSignals: [signature, 'e2e'],
+});
 
 const deriveVaultPda = (programId: PublicKey, collateralMint: PublicKey) =>
   PublicKey.findProgramAddressSync(
@@ -292,21 +286,15 @@ const deriveUserReceiptPda = (programId: PublicKey, vault: PublicKey, owner: Pub
     programId,
   )[0];
 
+const deriveNoteReceiptPda = (programId: PublicKey, vault: PublicKey, noteHash: Uint8Array) =>
+  PublicKey.findProgramAddressSync(
+    [Buffer.from('note_receipt'), vault.toBuffer(), Buffer.from(noteHash)],
+    programId,
+  )[0];
+
 const deriveVaultCollateralPda = (programId: PublicKey, vault: PublicKey) =>
   PublicKey.findProgramAddressSync(
     [Buffer.from('vault_collateral'), vault.toBuffer()],
-    programId,
-  )[0];
-
-const deriveProtectionPoolPda = (programId: PublicKey, vault: PublicKey) =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from('protection_pool'), vault.toBuffer()],
-    programId,
-  )[0];
-
-const deriveProtectionReservePda = (programId: PublicKey, vault: PublicKey) =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from('protection_reserve'), vault.toBuffer()],
     programId,
   )[0];
 
@@ -325,7 +313,12 @@ export const useVeilLend = (mint?: PublicKey) => {
   const wallet = useWallet();
   const { publicKey } = wallet;
   const e2eWalletAddress = E2E_TEST_MODE ? 'e2e-wallet' : null;
-  const walletAddress = publicKey?.toBase58() ?? e2eWalletAddress;
+  const e2eOverride =
+    typeof window !== 'undefined'
+      ? (window as Window & { __VEILLEND_E2E_WALLET_PUBLIC_KEY__?: string })
+          .__VEILLEND_E2E_WALLET_PUBLIC_KEY__
+      : null;
+  const walletAddress = publicKey?.toBase58() ?? e2eOverride ?? e2eWalletAddress;
 
   const collateralMint = mint ?? DEFAULT_COLLATERAL_MINT;
   const programIdBase58 = PROGRAM_ID_STRINGS[SOLANA_CLUSTER];
@@ -361,14 +354,6 @@ export const useVeilLend = (mint?: PublicKey) => {
     () => (programId && vaultAddress ? deriveVaultCollateralPda(programId, vaultAddress) : null),
     [programId, vaultAddress],
   );
-  const protectionPoolAddress = useMemo(
-    () => (programId && vaultAddress ? deriveProtectionPoolPda(programId, vaultAddress) : null),
-    [programId, vaultAddress],
-  );
-  const protectionReserveAddress = useMemo(
-    () => (programId && vaultAddress ? deriveProtectionReservePda(programId, vaultAddress) : null),
-    [programId, vaultAddress],
-  );
   const merkleTreeAddress = useMemo(
     () => (programId && vaultAddress ? deriveMerkleTreePda(programId, vaultAddress) : null),
     [programId, vaultAddress],
@@ -384,7 +369,7 @@ export const useVeilLend = (mint?: PublicKey) => {
   const [isLoading, setIsLoading] = useState(false);
   const [myPosition, setMyPosition] = useState<Position | null>(null);
   const [vaultStats, setVaultStats] = useState<VaultStats | null>(null);
-  const [protectionPoolStats, setProtectionPoolStats] = useState<ProtectionPoolStats | null>(null);
+  const [vaultAuthority, setVaultAuthority] = useState<PublicKey | null>(null);
   const [walletBalanceLamports, setWalletBalanceLamports] = useState(0);
   const [collateralBalanceLamports, setCollateralBalanceLamports] = useState(0);
   const [borrowBalanceLamports, setBorrowBalanceLamports] = useState(0);
@@ -395,6 +380,7 @@ export const useVeilLend = (mint?: PublicKey) => {
   const [usdcVaultCollateralLamports, setUsdcVaultCollateralLamports] = useState(0);
   const [merkleRoot, setMerkleRoot] = useState<Uint8Array | null>(null);
   const [merkleNextIndex, setMerkleNextIndex] = useState<number | null>(null);
+  const isMerkleTreeInitialized = E2E_TEST_MODE || merkleNextIndex !== null;
   const [note, setNote] = useState<NoteRecord | null>(null);
   const [privacyNotes, setPrivacyNotes] = useState<PrivacyNoteV2[]>([]);
   const [lastSpendProof, setLastSpendProof] = useState<SpendProof | null>(null);
@@ -442,6 +428,44 @@ export const useVeilLend = (mint?: PublicKey) => {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     try {
+      if (E2E_TEST_MODE) {
+        const e2eBalances =
+          typeof window !== 'undefined'
+            ? (window as Window & {
+                __VEILLEND_E2E_BALANCES__?: {
+                  walletBalanceLamports?: number;
+                  collateralBalanceLamports?: number;
+                  borrowBalanceLamports?: number;
+                  usdcBalanceLamports?: number;
+                };
+              }).__VEILLEND_E2E_BALANCES__
+            : null;
+        const defaultDecimals = collateralMint.equals(WSOL_MINT) ? 9 : 6;
+        setWalletBalanceLamports(
+          e2eBalances?.walletBalanceLamports ?? 5 * Math.pow(10, 9),
+        );
+        setCollateralBalanceLamports(
+          e2eBalances?.collateralBalanceLamports ?? 5 * Math.pow(10, defaultDecimals),
+        );
+        setBorrowBalanceLamports(e2eBalances?.borrowBalanceLamports ?? 0);
+        setUsdcBalanceLamports(
+          e2eBalances?.usdcBalanceLamports ?? 5 * Math.pow(10, 6),
+        );
+        setCollateralDecimals(defaultDecimals);
+        setBorrowDecimals(6);
+        setBorrowMintAddress(USDC_MINT);
+        setVaultAuthority(publicKey ?? null);
+        setVaultStats({
+          totalCollateral: 0,
+          totalBorrowed: 0,
+          totalShares: 0,
+          ltv: 75,
+          liquidationThreshold: 85,
+        });
+        setMyPosition(null);
+        setIsLoading(false);
+        return;
+      }
       if (publicKey) {
         const solBalance = await connection.getBalance(publicKey);
         setWalletBalanceLamports(solBalance);
@@ -486,7 +510,7 @@ export const useVeilLend = (mint?: PublicKey) => {
 
       if (!programId || !vaultAddress) {
         setVaultStats(null);
-        setProtectionPoolStats(null);
+        setVaultAuthority(null);
         setMyPosition(null);
         return;
       }
@@ -494,16 +518,19 @@ export const useVeilLend = (mint?: PublicKey) => {
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
         setVaultStats(null);
+        setVaultAuthority(null);
         setMyPosition(null);
       } else {
         const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
         const liquidationThresholdBps = toNumber(vaultAccount.liquidation_threshold_bps);
+        const ltvBps = Math.min(toNumber(vaultAccount.ltv_bps), BORROW_LIMIT_BPS);
+        setVaultAuthority(vaultAccount.authority as PublicKey);
         setBorrowMintAddress(vaultAccount.borrow_mint as PublicKey);
         setVaultStats({
           totalCollateral: toNumber(vaultAccount.total_collateral),
           totalBorrowed: toNumber(vaultAccount.total_borrowed),
           totalShares: toNumber(vaultAccount.total_shares),
-          ltv: toNumber(vaultAccount.ltv_bps) / 100,
+          ltv: ltvBps / 100,
           liquidationThreshold: liquidationThresholdBps / 100,
         });
 
@@ -543,31 +570,15 @@ export const useVeilLend = (mint?: PublicKey) => {
         }
       }
 
-      if (protectionPoolAddress) {
-        const poolInfo = await connection.getAccountInfo(protectionPoolAddress);
-        if (poolInfo) {
-          const pool = decodeAccount(protectionPoolLayout, poolInfo.data);
-          setProtectionPoolStats({
-            reserveBalance: toNumber(pool.reserve_balance),
-            totalCoverage: toNumber(pool.total_coverage),
-            totalSubscribers: toNumber(pool.total_subscribers),
-            totalExecutions: toNumber(pool.total_executions),
-            totalPremiumCollected: toNumber(pool.total_premium_collected),
-            totalProtectionPaid: toNumber(pool.total_protection_paid),
-          });
-        } else {
-          setProtectionPoolStats(null);
-        }
-      } else {
-        setProtectionPoolStats(null);
-      }
-
       if (merkleTreeAddress) {
         const treeInfo = await connection.getAccountInfo(merkleTreeAddress);
         if (treeInfo) {
           const tree = decodeAccount(merkleTreeLayout, treeInfo.data);
           setMerkleRoot(Uint8Array.from(tree.root));
           setMerkleNextIndex(Number(tree.next_index));
+        } else if (E2E_TEST_MODE) {
+          setMerkleRoot(new Uint8Array(32));
+          setMerkleNextIndex(0);
         } else {
           setMerkleRoot(null);
           setMerkleNextIndex(null);
@@ -607,7 +618,6 @@ export const useVeilLend = (mint?: PublicKey) => {
     collateralMint,
     connection,
     programId,
-    protectionPoolAddress,
     publicKey,
     userReceiptAddress,
     vaultAddress,
@@ -635,6 +645,7 @@ export const useVeilLend = (mint?: PublicKey) => {
     return record;
   }, [walletAddress]);
 
+
   const rotateNote = useCallback(
     async (lastTxnId: string) => {
       if (!walletAddress) {
@@ -655,7 +666,7 @@ export const useVeilLend = (mint?: PublicKey) => {
   }, [walletAddress]);
 
   const buildAtaInstruction = useCallback(
-    async (mintAddress: PublicKey, owner: PublicKey) => {
+    async (mintAddress: PublicKey, owner: PublicKey, payer: PublicKey = owner) => {
       const ata = getAssociatedTokenAddressSync(
         mintAddress,
         owner,
@@ -668,7 +679,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         return { ata, instructions: [] };
       }
       const ix = createAssociatedTokenAccountInstruction(
-        owner,
+        payer,
         ata,
         owner,
         mintAddress,
@@ -678,6 +689,11 @@ export const useVeilLend = (mint?: PublicKey) => {
       return { ata, instructions: [ix] };
     },
     [connection],
+  );
+
+  const resolveCollateralSymbol = useCallback(
+    (mint: PublicKey) => (mint.equals(WSOL_MINT) ? 'SOL' : 'USDC') as 'SOL' | 'USDC',
+    [],
   );
 
   const getActivePrivacyNote = useCallback(
@@ -693,6 +709,16 @@ export const useVeilLend = (mint?: PublicKey) => {
     },
     [publicKey],
   );
+
+  const getNoteHashBytes = useCallback(() => {
+    if (!note?.noteHash) {
+      throw new Error('Note access key required');
+    }
+    if (!/^[0-9a-fA-F]{64}$/.test(note.noteHash)) {
+      throw new Error('Invalid note access hash');
+    }
+    return fromHex(note.noteHash);
+  }, [note]);
 
   const buildMerkleProofForNote = useCallback(
     async (note: PrivacyNoteV2, vaultKey: PublicKey) => {
@@ -724,12 +750,69 @@ export const useVeilLend = (mint?: PublicKey) => {
       tx.feePayer = publicKey;
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
-      const signature = await wallet.sendTransaction(tx, connection);
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
-      return signature;
+
+      const message = new TransactionMessage({
+        payerKey: publicKey,
+        recentBlockhash: blockhash,
+        instructions: [...preInstructions, ...instructions],
+      }).compileToV0Message();
+      const simulation = await connection.simulateTransaction(new VersionedTransaction(message), {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+      });
+      if (simulation.value.err) {
+        const logSnippet = simulation.value.logs?.slice(-6).join(' | ');
+        const details = logSnippet ? ` Logs: ${logSnippet}` : '';
+        throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}.${details}`);
+      }
+
+      try {
+        if (wallet.signTransaction) {
+          const signed = await wallet.signTransaction(tx);
+          const signature = await connection.sendRawTransaction(signed.serialize(), {
+            skipPreflight: true,
+          });
+          await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+          return signature;
+        }
+
+        const signature = await wallet.sendTransaction(tx, connection);
+        await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }, 'confirmed');
+        return signature;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const logs = (error as { logs?: string[]; cause?: { logs?: string[] } })?.logs
+          ?? (error as { cause?: { logs?: string[] } })?.cause?.logs;
+        const logSnippet = logs?.slice(-6).join(' | ');
+        const details = logSnippet ? ` Logs: ${logSnippet}` : '';
+        throw new Error(`${message}.${details}`);
+      }
     },
     [connection, publicKey, wallet],
   );
+
+  const initializeMerkleTree = useCallback(async () => {
+    if (!programId || !vaultAddress || !merkleTreeAddress || !publicKey) {
+      throw new Error('Program not ready or wallet not connected');
+    }
+    if (vaultAuthority && !publicKey.equals(vaultAuthority)) {
+      throw new Error('Only vault authority can initialize the Merkle tree');
+    }
+
+    const ix = new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: publicKey, isSigner: true, isWritable: true },
+        { pubkey: vaultAddress, isSigner: false, isWritable: false },
+        { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: encodeInstruction('initialize_merkle_tree'),
+    });
+
+    await sendTransaction([ix]);
+    await refresh();
+  }, [merkleTreeAddress, programId, publicKey, refresh, sendTransaction, vaultAddress, vaultAuthority]);
 
   const deposit = useCallback(
     async (amount: number) => {
@@ -743,6 +826,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
+      const collateralSymbol = resolveCollateralSymbol(collateral);
 
       const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
         collateral,
@@ -773,16 +857,16 @@ export const useVeilLend = (mint?: PublicKey) => {
       const newBorrow = BigInt(currentBorrow);
 
       let encryptedBalance: number[];
-      let clientPubkey: number[];
+      const clientPubkey = arciumKeypair
+        ? Array.from(arciumKeypair.publicKey)
+        : Array.from(publicKey.toBytes());
 
       if (arciumClient && arciumKeypair) {
         const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
         encryptedBalance = encodeEncryptedBalance(bundle);
-        clientPubkey = Array.from(arciumKeypair.publicKey);
         storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
       } else {
         encryptedBalance = randomBytes32();
-        clientPubkey = Array.from(publicKey.toBytes());
       }
 
       const ix = new TransactionInstruction({
@@ -819,12 +903,13 @@ export const useVeilLend = (mint?: PublicKey) => {
           depositAmount: BigInt(amount),
           borrowAmount: 0n,
           noteIndex,
+          collateralSymbol,
         });
         savePrivacyNote(publicKey.toBase58(), privacyNote);
       }
 
       await refresh();
-      return signature;
+      return { signature };
     },
     [
       arciumClient,
@@ -835,6 +920,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       programId,
       publicKey,
       refresh,
+      resolveCollateralSymbol,
       sendTransaction,
       userReceiptAddress,
       vaultAddress,
@@ -916,7 +1002,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       }
 
       await refresh();
-      return signature;
+      return { signature };
     },
     [
       arciumClient,
@@ -1044,7 +1130,7 @@ export const useVeilLend = (mint?: PublicKey) => {
 
       const signature = await sendTransaction([ix], instructions);
       await refresh();
-      return signature;
+      return { signature };
     },
     [
       arciumClient,
@@ -1159,7 +1245,7 @@ export const useVeilLend = (mint?: PublicKey) => {
 
       const signature = await sendTransaction([ix], instructions);
       await refresh();
-      return signature;
+      return { signature };
     },
     [
       arciumClient,
@@ -1184,6 +1270,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
+      const noteHashBytes = getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1192,16 +1279,18 @@ export const useVeilLend = (mint?: PublicKey) => {
       const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
+      const collateralSymbol = resolveCollateralSymbol(collateral);
 
       const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
         collateral,
         publicKey,
       );
-      const { ata: userReceiptAta, instructions: receiptInstructions } = await buildAtaInstruction(
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const { ata: noteReceiptAta, instructions: receiptInstructions } = await buildAtaInstruction(
         receiptMint,
+        noteReceiptPda,
         publicKey,
       );
-      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
       const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
       const preInstructions = [...instructions, ...receiptInstructions];
 
@@ -1227,16 +1316,16 @@ export const useVeilLend = (mint?: PublicKey) => {
       const newBorrow = baseBorrow;
 
       let encryptedBalance: number[];
-      let clientPubkey: number[];
+      const clientPubkey = arciumKeypair
+        ? Array.from(arciumKeypair.publicKey)
+        : Array.from(publicKey.toBytes());
 
       if (arciumClient && arciumKeypair) {
         const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
         encryptedBalance = encodeEncryptedBalance(bundle);
-        clientPubkey = Array.from(arciumKeypair.publicKey);
         storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
       } else {
         encryptedBalance = randomBytes32();
-        clientPubkey = Array.from(publicKey.toBytes());
       }
 
       const noteIndex = merkleNextIndex ?? getNextNoteIndex(walletAddress);
@@ -1247,20 +1336,32 @@ export const useVeilLend = (mint?: PublicKey) => {
         depositAmount: newDeposit,
         borrowAmount: newBorrow,
         noteIndex,
+        collateralSymbol,
       });
       const commitment = Array.from(fromHex(newNote.commitment));
+
+      let zkProof: ActionResult['proof'];
 
       let ix: TransactionInstruction;
       if (hasExistingNote && activeNote) {
         const proof = await buildMerkleProofForNote(activeNote, vaultAddress);
+        const inputs = await buildZkInputs({
+          action: 'supply',
+          oldNote: activeNote,
+          newNote,
+          merkleProof: proof,
+          collateralSymbol,
+          deltaAmount: BigInt(amount),
+        });
+        zkProof = await generateZkProof('supply', inputs);
         ix = new TransactionInstruction({
           programId,
           keys: [
             { pubkey: publicKey, isSigner: true, isWritable: true },
             { pubkey: vaultAddress, isSigner: false, isWritable: true },
-            { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+            { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
             { pubkey: receiptMint, isSigner: false, isWritable: true },
-            { pubkey: userReceiptAta, isSigner: false, isWritable: true },
+            { pubkey: noteReceiptAta, isSigner: false, isWritable: true },
             { pubkey: userCollateralAta, isSigner: false, isWritable: true },
             { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
             { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
@@ -1284,6 +1385,7 @@ export const useVeilLend = (mint?: PublicKey) => {
             current_commitment: Array.from(fromHex(activeNote.commitment)),
             new_commitment: commitment,
             nullifier: Array.from(fromHex(activeNote.nullifier)),
+            note_hash: Array.from(noteHashBytes),
             merkle_proof: proof.proof.map((node) => Array.from(node)),
             merkle_path: proof.path,
           }),
@@ -1294,9 +1396,9 @@ export const useVeilLend = (mint?: PublicKey) => {
           keys: [
             { pubkey: publicKey, isSigner: true, isWritable: true },
             { pubkey: vaultAddress, isSigner: false, isWritable: true },
-            { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+            { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
             { pubkey: receiptMint, isSigner: false, isWritable: true },
-            { pubkey: userReceiptAta, isSigner: false, isWritable: true },
+            { pubkey: noteReceiptAta, isSigner: false, isWritable: true },
             { pubkey: userCollateralAta, isSigner: false, isWritable: true },
             { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
             { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
@@ -1310,6 +1412,7 @@ export const useVeilLend = (mint?: PublicKey) => {
             amount: new BN(amount),
             encrypted_balance: encryptedBalance,
             client_pubkey: clientPubkey,
+            note_hash: Array.from(noteHashBytes),
             commitment,
           }),
         });
@@ -1321,7 +1424,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       }
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return signature;
+      return { signature, proof: zkProof };
     },
     [
       arciumClient,
@@ -1335,8 +1438,9 @@ export const useVeilLend = (mint?: PublicKey) => {
       programId,
       publicKey,
       refresh,
+      resolveCollateralSymbol,
       sendTransaction,
-      userReceiptAddress,
+      getNoteHashBytes,
       vaultAddress,
       vaultCollateralAddress,
     ],
@@ -1350,6 +1454,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
+      const noteHashBytes = getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1363,7 +1468,8 @@ export const useVeilLend = (mint?: PublicKey) => {
         borrowMint,
         publicKey,
       );
-      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const collateralSymbol = resolveCollateralSymbol(collateral);
 
       const kaminoBorrowConfig = {
         programId: KAMINO_CONFIG.programId,
@@ -1431,14 +1537,25 @@ export const useVeilLend = (mint?: PublicKey) => {
         depositAmount: newDeposit,
         borrowAmount: newBorrow,
         noteIndex,
+        collateralSymbol,
       });
+
+      const inputs = await buildZkInputs({
+        action: 'borrow',
+        oldNote: activeNote,
+        newNote,
+        merkleProof: proof,
+        collateralSymbol,
+        deltaAmount: BigInt(amount),
+      });
+      const zkProof = await generateZkProof('borrow', inputs);
 
       const ix = new TransactionInstruction({
         programId,
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
           { pubkey: vaultAddress, isSigner: false, isWritable: true },
-          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
           { pubkey: userBorrowAta, isSigner: false, isWritable: true },
           { pubkey: kaminoMarket, isSigner: false, isWritable: false },
           { pubkey: kaminoObligation, isSigner: false, isWritable: false },
@@ -1478,6 +1595,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
+          note_hash: Array.from(noteHashBytes),
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1487,7 +1605,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return signature;
+      return { signature, proof: zkProof };
     },
     [
       arciumClient,
@@ -1501,8 +1619,9 @@ export const useVeilLend = (mint?: PublicKey) => {
       programId,
       publicKey,
       refresh,
+      resolveCollateralSymbol,
       sendTransaction,
-      userReceiptAddress,
+      getNoteHashBytes,
       vaultAddress,
     ],
   );
@@ -1515,6 +1634,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
+      const noteHashBytes = getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1528,7 +1648,8 @@ export const useVeilLend = (mint?: PublicKey) => {
         repayMint,
         publicKey,
       );
-      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const collateralSymbol = resolveCollateralSymbol(collateral);
 
       const kaminoRepayConfig = {
         programId: KAMINO_CONFIG.programId,
@@ -1569,9 +1690,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       const proof = await buildMerkleProofForNote(activeNote, vaultAddress);
       const walletAddress = publicKey.toBase58();
       const newDeposit = BigInt(activeNote.depositAmount);
-      const currentBorrow = BigInt(activeNote.borrowAmount);
-      const repayAmount = BigInt(amount);
-      const newBorrow = currentBorrow > repayAmount ? currentBorrow - repayAmount : 0n;
+      const oldBorrow = BigInt(activeNote.borrowAmount);
+      const requestedRepay = BigInt(amount);
+      const deltaRepay = requestedRepay > oldBorrow ? oldBorrow : requestedRepay;
+      const newBorrow = oldBorrow - deltaRepay;
 
       let encryptedBalance: number[];
       if (arciumClient) {
@@ -1590,14 +1712,25 @@ export const useVeilLend = (mint?: PublicKey) => {
         depositAmount: newDeposit,
         borrowAmount: newBorrow,
         noteIndex,
+        collateralSymbol,
       });
+
+      const inputs = await buildZkInputs({
+        action: 'repay',
+        oldNote: activeNote,
+        newNote,
+        merkleProof: proof,
+        collateralSymbol,
+        deltaAmount: deltaRepay,
+      });
+      const zkProof = await generateZkProof('repay', inputs);
 
       const ix = new TransactionInstruction({
         programId,
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
           { pubkey: vaultAddress, isSigner: false, isWritable: true },
-          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
           { pubkey: userRepayAta, isSigner: false, isWritable: true },
           { pubkey: kaminoMarket, isSigner: false, isWritable: false },
           { pubkey: kaminoObligation, isSigner: false, isWritable: false },
@@ -1634,6 +1767,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
+          note_hash: Array.from(noteHashBytes),
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1643,7 +1777,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return signature;
+      return { signature, proof: zkProof };
     },
     [
       arciumClient,
@@ -1656,8 +1790,9 @@ export const useVeilLend = (mint?: PublicKey) => {
       programId,
       publicKey,
       refresh,
+      resolveCollateralSymbol,
       sendTransaction,
-      userReceiptAddress,
+      getNoteHashBytes,
       vaultAddress,
     ],
   );
@@ -1670,6 +1805,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
+      const noteHashBytes = getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1679,8 +1815,11 @@ export const useVeilLend = (mint?: PublicKey) => {
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
-      const { ata: userReceiptAta, instructions } = await buildAtaInstruction(
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const collateralSymbol = resolveCollateralSymbol(collateral);
+      const { ata: noteReceiptAta, instructions } = await buildAtaInstruction(
         receiptMint,
+        noteReceiptPda,
         publicKey,
       );
       const { ata: userCollateralAta, instructions: collateralInstructions } = await buildAtaInstruction(
@@ -1689,7 +1828,6 @@ export const useVeilLend = (mint?: PublicKey) => {
       );
       const preInstructions = [...instructions, ...collateralInstructions];
 
-      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
       const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
 
       const activeNote = getActivePrivacyNote(vaultAddress);
@@ -1723,16 +1861,27 @@ export const useVeilLend = (mint?: PublicKey) => {
         depositAmount: newDeposit,
         borrowAmount: newBorrow,
         noteIndex,
+        collateralSymbol,
       });
+
+      const inputs = await buildZkInputs({
+        action: 'withdraw',
+        oldNote: activeNote,
+        newNote,
+        merkleProof: proof,
+        collateralSymbol,
+        deltaAmount: collateralReturned,
+      });
+      const zkProof = await generateZkProof('withdraw', inputs);
 
       const ix = new TransactionInstruction({
         programId,
         keys: [
           { pubkey: publicKey, isSigner: true, isWritable: true },
           { pubkey: vaultAddress, isSigner: false, isWritable: true },
-          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
           { pubkey: receiptMint, isSigner: false, isWritable: true },
-          { pubkey: userReceiptAta, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptAta, isSigner: false, isWritable: true },
           { pubkey: userCollateralAta, isSigner: false, isWritable: true },
           { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
           { pubkey: merkleTreeAddress, isSigner: false, isWritable: true },
@@ -1758,6 +1907,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
+          note_hash: Array.from(noteHashBytes),
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1767,7 +1917,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return signature;
+      return { signature, proof: zkProof };
     },
     [
       arciumClient,
@@ -1780,124 +1930,69 @@ export const useVeilLend = (mint?: PublicKey) => {
       programId,
       publicKey,
       refresh,
+      resolveCollateralSymbol,
       sendTransaction,
-      userReceiptAddress,
+      getNoteHashBytes,
       vaultAddress,
       vaultCollateralAddress,
     ],
   );
 
-  const subscribeProtection = useCallback(
-    async (tier: number, duration: number) => {
-      if (!programId || !vaultAddress || !publicKey) {
-        throw new Error('Program not ready or wallet not connected');
-      }
-      if (!protectionPoolAddress || !protectionReserveAddress) {
-        throw new Error('Protection pool not initialized');
-      }
+  const privacyTotals = useMemo(() => {
+    if (!walletAddress) return null;
+    if (E2E_TEST_MODE) return getTotalBalance(walletAddress);
+    if (!vaultAddress) return null;
+    return getTotalBalance(walletAddress, vaultAddress.toBase58());
+  }, [privacyNotes, vaultAddress, walletAddress]);
 
-      const { ata: userPaymentAta, instructions } = await buildAtaInstruction(
-        collateralMint,
-        publicKey,
-      );
-      const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
+  const displayPosition = useMemo(() => {
+    if (!privacyTotals || !vaultStats) return myPosition;
+    const hasPrivateBalance = privacyTotals.deposit > 0n || privacyTotals.borrow > 0n;
+    if (!hasPrivateBalance) return myPosition;
 
-      const ix = new TransactionInstruction({
-        programId,
-        keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },
-          { pubkey: vaultAddress, isSigner: false, isWritable: true },
-          { pubkey: userReceiptPda, isSigner: false, isWritable: true },
-          { pubkey: protectionPoolAddress, isSigner: false, isWritable: true },
-          { pubkey: userPaymentAta, isSigner: false, isWritable: true },
-          { pubkey: protectionReserveAddress, isSigner: false, isWritable: true },
-          { pubkey: collateralMint, isSigner: false, isWritable: false },
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        data: encodeInstruction('subscribe_protection', {
-          tier,
-          duration_days: duration,
-        }),
-      });
+    const deposit = Number(privacyTotals.deposit);
+    const borrow = Number(privacyTotals.borrow);
+    const liquidationThresholdBps = Math.round(vaultStats.liquidationThreshold * 100);
+    const healthFactor = borrow > 0
+      ? Math.floor((deposit * liquidationThresholdBps) / borrow)
+      : 0;
 
-      await sendTransaction([ix], instructions);
-      await refresh();
-    },
-    [
-      buildAtaInstruction,
-      collateralMint,
-      programId,
-      protectionPoolAddress,
-      protectionReserveAddress,
-      publicKey,
-      refresh,
-      sendTransaction,
-      userReceiptAddress,
-      vaultAddress,
-    ],
-  );
-
-  const executeProtection = useCallback(async () => {
-    if (!programId || !vaultAddress || !publicKey) {
-      throw new Error('Program not ready or wallet not connected');
-    }
-    if (!protectionPoolAddress || !protectionReserveAddress || !vaultCollateralAddress) {
-      throw new Error('Protection pool not initialized');
-    }
-    const userReceiptPda = userReceiptAddress ?? deriveUserReceiptPda(programId, vaultAddress, publicKey);
-
-    const ix = new TransactionInstruction({
-      programId,
-      keys: [
-        { pubkey: publicKey, isSigner: true, isWritable: true },
-        { pubkey: vaultAddress, isSigner: false, isWritable: true },
-        { pubkey: publicKey, isSigner: false, isWritable: true },
-        { pubkey: userReceiptPda, isSigner: false, isWritable: true },
-        { pubkey: protectionPoolAddress, isSigner: false, isWritable: true },
-        { pubkey: protectionReserveAddress, isSigner: false, isWritable: true },
-        { pubkey: vaultCollateralAddress, isSigner: false, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        { pubkey: collateralMint, isSigner: false, isWritable: false },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      ],
-      data: encodeInstruction('execute_protection'),
-    });
-
-    await sendTransaction([ix]);
-    await refresh();
-  }, [
-    collateralMint,
-    programId,
-    protectionPoolAddress,
-    protectionReserveAddress,
-    publicKey,
-    refresh,
-    sendTransaction,
-    userReceiptAddress,
-    vaultAddress,
-    vaultCollateralAddress,
-  ]);
+    return {
+      deposit,
+      borrow,
+      shares: myPosition?.shares ?? 0,
+      healthFactor,
+      protectionTier: myPosition?.protectionTier ?? 0,
+      protectionExpiry: myPosition?.protectionExpiry ?? 0,
+      lastUpdateTimestamp: myPosition?.lastUpdateTimestamp ?? 0,
+    };
+  }, [myPosition, privacyTotals, vaultStats]);
 
   const borrowCapacityLamports = useMemo(() => {
-    if (!myPosition || !vaultStats) return 0;
-    const maxBorrow = Math.floor((myPosition.deposit * vaultStats.ltv) / 100);
-    return Math.max(0, maxBorrow - myPosition.borrow);
-  }, [myPosition, vaultStats]);
+    if (!displayPosition || !vaultStats) return 0;
+    const maxBorrow = Math.floor((displayPosition.deposit * vaultStats.ltv) / 100);
+    return Math.max(0, maxBorrow - displayPosition.borrow);
+  }, [displayPosition, vaultStats]);
 
-  const e2eAction = useCallback(async () => {
+  const e2eFastAction = useCallback(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 150));
-    return buildE2eSignature();
+    return { signature: buildE2eSignature() };
+  }, []);
+
+  const e2eSecureAction = useCallback(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    const signature = buildE2eSignature();
+    return { signature, proof: buildE2eProof(signature) };
   }, []);
 
   const fastAdapter = useMemo(
     () =>
       E2E_TEST_MODE
         ? createFastAdapter({
-            deposit: e2eAction,
-            withdraw: e2eAction,
-            borrow: e2eAction,
-            repay: e2eAction,
+            deposit: e2eFastAction,
+            withdraw: e2eFastAction,
+            borrow: e2eFastAction,
+            repay: e2eFastAction,
           })
         : createFastAdapter({
             deposit,
@@ -1905,17 +2000,17 @@ export const useVeilLend = (mint?: PublicKey) => {
             borrow,
             repay,
           }),
-    [borrow, deposit, e2eAction, repay, withdraw],
+    [borrow, deposit, e2eFastAction, repay, withdraw],
   );
 
   const secureAdapter = useMemo(
     () =>
       E2E_TEST_MODE
         ? createFastAdapter({
-            deposit: e2eAction,
-            withdraw: e2eAction,
-            borrow: e2eAction,
-            repay: e2eAction,
+            deposit: e2eSecureAction,
+            withdraw: e2eSecureAction,
+            borrow: e2eSecureAction,
+            repay: e2eSecureAction,
           })
         : createFastAdapter({
             deposit: secureDeposit,
@@ -1923,7 +2018,7 @@ export const useVeilLend = (mint?: PublicKey) => {
             borrow: secureBorrow,
             repay: secureRepay,
           }),
-    [e2eAction, secureBorrow, secureDeposit, secureRepay, secureWithdraw],
+    [e2eSecureAction, secureBorrow, secureDeposit, secureRepay, secureWithdraw],
   );
 
   return {
@@ -1947,23 +2042,24 @@ export const useVeilLend = (mint?: PublicKey) => {
     privacyNotes,
     lastSpendProof,
     myPosition,
+    displayPosition,
     vaultStats,
-    protectionPoolStats,
+    vaultAuthority,
     arciumClient,
     arciumKeypair,
     deposit,
     withdraw,
     borrow,
     repay,
-    subscribeProtection,
-    executeProtection,
     createInitialNote,
     rotateNote,
+    initializeMerkleTree,
     clearNote,
     refreshNote,
     fastAdapter,
     secureAdapter,
     isLoading,
     refresh,
+    isMerkleTreeInitialized,
   };
 };

@@ -1,8 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount};
-use kamino_lend::cpi::{refresh_obligation, refresh_reserve, repay_obligation_liquidity};
 use kamino_lend::cpi::accounts::{RefreshObligation, RefreshReserve, RepayObligationLiquidity};
+use kamino_lend::cpi::{refresh_obligation, refresh_reserve, repay_obligation_liquidity};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, verify_merkle_proof};
@@ -15,6 +16,7 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
 )]
 pub struct RepaySecure<'info> {
     #[account(mut)]
@@ -29,11 +31,10 @@ pub struct RepaySecure<'info> {
 
     #[account(
         mut,
-        seeds = [USER_RECEIPT_SEED, vault.key().as_ref(), user.key().as_ref()],
-        bump = user_receipt.bump,
-        constraint = user_receipt.owner == user.key(),
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        bump = note_receipt.bump,
     )]
-    pub user_receipt: Box<Account<'info, UserReceipt>>,
+    pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(mut)]
     pub user_repay_account: Box<Account<'info, TokenAccount>>,
@@ -104,6 +105,7 @@ pub fn repay_secure(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
+    note_hash: [u8; 32],
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -111,9 +113,16 @@ pub fn repay_secure(
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
-    let user_receipt = &mut ctx.accounts.user_receipt;
-    let repay_amount = amount.min(user_receipt.borrowed_amount);
+    let note_receipt = &mut ctx.accounts.note_receipt;
+    let repay_amount = amount.min(note_receipt.borrowed_amount);
     require!(repay_amount > 0, VeilLendError::InsufficientCollateral);
+
+    if is_zero_pubkey(&note_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if note_receipt.note_hash != note_hash {
+        return err!(VeilLendError::InvalidNoteHash);
+    }
 
     require!(
         ctx.accounts.merkle_tree.vault == vault.key(),
@@ -165,7 +174,10 @@ pub fn repay_secure(
                 obligation: ctx.accounts.kamino_obligation.to_account_info(),
                 lending_market: ctx.accounts.kamino_market.to_account_info(),
                 repay_reserve: ctx.accounts.kamino_repay_reserve.to_account_info(),
-                reserve_liquidity_mint: ctx.accounts.kamino_reserve_liquidity_mint.to_account_info(),
+                reserve_liquidity_mint: ctx
+                    .accounts
+                    .kamino_reserve_liquidity_mint
+                    .to_account_info(),
                 reserve_destination_liquidity: ctx
                     .accounts
                     .kamino_reserve_destination_liquidity
@@ -201,17 +213,17 @@ pub fn repay_secure(
         .total_borrowed
         .checked_sub(repay_amount)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.borrowed_amount = user_receipt
+    note_receipt.borrowed_amount = note_receipt
         .borrowed_amount
         .checked_sub(repay_amount)
         .ok_or(VeilLendError::MathOverflow)?;
-    user_receipt.encrypted_balance = encrypted_balance;
+    note_receipt.encrypted_balance = encrypted_balance;
 
     emit!(RepaySecureEvent {
         vault: vault.key(),
         user: ctx.accounts.user.key(),
         amount: repay_amount,
-        remaining_debt: user_receipt.borrowed_amount,
+        remaining_debt: note_receipt.borrowed_amount,
         current_commitment,
         new_commitment,
         nullifier,

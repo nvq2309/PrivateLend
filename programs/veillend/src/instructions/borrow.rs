@@ -1,12 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
+use kamino_lend::cpi::accounts::{BorrowObligationLiquidity, RefreshObligation, RefreshReserve};
 use kamino_lend::cpi::{borrow_obligation_liquidity, refresh_obligation, refresh_reserve};
-use kamino_lend::cpi::accounts::{
-    BorrowObligationLiquidity,
-    RefreshObligation,
-    RefreshReserve,
-};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::state::*;
@@ -85,20 +82,21 @@ pub struct Borrow<'info> {
     pub kamino_program: AccountInfo<'info>,
 }
 
-pub fn borrow(
-    ctx: Context<Borrow>,
-    amount: u64,
-    encrypted_balance: [u8; 32],
-) -> Result<()> {
+pub fn borrow(ctx: Context<Borrow>, amount: u64, encrypted_balance: [u8; 32]) -> Result<()> {
     require!(!ctx.accounts.vault.is_paused, VeilLendError::VaultPaused);
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
     let user_receipt = &mut ctx.accounts.user_receipt;
 
+    if is_zero_pubkey(&user_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+
+    let ltv_bps = vault.ltv_bps.min(MAX_LTV_BPS);
     let max_borrow = user_receipt
         .deposited_collateral
-        .checked_mul(MAX_LTV_BPS)
+        .checked_mul(ltv_bps)
         .ok_or(VeilLendError::MathOverflow)?
         .checked_div(BPS_DENOMINATOR)
         .ok_or(VeilLendError::MathOverflow)?;

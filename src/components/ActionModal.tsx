@@ -1,7 +1,7 @@
 import React from 'react';
 import { LendingMode } from '../sdk/adapter';
 import { NoteRecord } from '../sdk/notes';
-import { ProofArtifact } from '../sdk/proof';
+import type { ZkProofResult } from '../sdk/zkProof';
 
 export type ActionType = 'SUPPLY' | 'BORROW' | 'REPAY' | 'WITHDRAW';
 
@@ -16,13 +16,16 @@ interface ActionModalProps {
   error?: string | null;
   note?: NoteRecord | null;
   pendingNote?: NoteRecord | null;
-  proof?: ProofArtifact | null;
+  proof?: ZkProofResult | null;
   onAmountChange: (value: string) => void;
   onModeChange: (mode: LendingMode) => void;
   onConfirm: () => void;
   onClose: () => void;
   onSaveNote?: () => void;
   onMaxClick?: () => void;
+  showMerkleInit?: boolean;
+  canInitMerkleTree?: boolean;
+  onInitMerkleTree?: () => void;
 }
 
 const modeCopy = (mode: LendingMode) =>
@@ -54,6 +57,9 @@ export const ActionModal: React.FC<ActionModalProps> = ({
   onClose,
   onSaveNote,
   onMaxClick,
+  showMerkleInit,
+  canInitMerkleTree,
+  onInitMerkleTree,
 }) => {
   if (!open) return null;
   const modeText = modeCopy(mode);
@@ -136,16 +142,46 @@ export const ActionModal: React.FC<ActionModalProps> = ({
             <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-xs space-y-2">
               <div className="flex justify-between text-slate-300">
                 <span>Active note</span>
-                <span className="text-slate-300">
-                  {note ? `${note.noteHash.slice(0, 12)}...` : 'None'}
+                <span className="text-slate-300" data-snapshot="dynamic">
+                  {note ? `${(note.noteString ?? note.noteHash).slice(0, 12)}...` : 'None'}
                 </span>
               </div>
               <div className="flex justify-between text-slate-300">
                 <span>Last tx id</span>
-                <span className="text-slate-300">
+                <span className="text-slate-300" data-snapshot="dynamic">
                   {note ? note.lastTxnId.slice(0, 10) : '0'}
                 </span>
               </div>
+            </div>
+          )}
+
+          {showMerkleInit && (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs space-y-3 animate-fade-in">
+              <div className="flex items-start gap-3">
+                <div className="text-amber-400 mt-0.5">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div className="space-y-1">
+                  <p className="font-bold text-amber-200">Merkle Tree Missing</p>
+                  <p className="text-amber-200/70 leading-relaxed">
+                    {canInitMerkleTree
+                      ? 'The privacy tree must be initialized before shielded actions can be performed.'
+                      : 'The vault authority has not initialized the privacy tree yet. Shielded actions are currently disabled.'}
+                  </p>
+                </div>
+              </div>
+              {canInitMerkleTree && (
+                <button
+                  type="button"
+                  onClick={onInitMerkleTree}
+                  disabled={busy}
+                  className="w-full py-2.5 rounded-xl font-bold bg-amber-500 hover:bg-amber-400 text-slate-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-900/20"
+                >
+                  Initialize Tree
+                </button>
+              )}
             </div>
           )}
 
@@ -159,15 +195,19 @@ export const ActionModal: React.FC<ActionModalProps> = ({
             <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-xs space-y-3">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold mb-2">
-                  Proof artifact
+                  Proof signals
                 </p>
-                <p className="font-mono text-emerald-300 break-all">{proof.proofHash}</p>
+                <p className="font-mono text-emerald-300 break-all" data-snapshot="dynamic">
+                  {proof.publicSignals.join(', ')}
+                </p>
               </div>
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold mb-2">
-                  Next note
+                  New note
                 </p>
-                <p className="font-mono text-cyan-300 break-all">{pendingNote.noteHash}</p>
+                <p className="font-mono text-cyan-300 break-all" data-snapshot="dynamic">
+                  {pendingNote.noteString ?? pendingNote.noteHash}
+                </p>
               </div>
               {onSaveNote && (
                 <button
@@ -175,7 +215,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                   onClick={onSaveNote}
                   className="w-full py-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40 hover:bg-emerald-500/30 transition-all"
                 >
-                  Save to storage
+                  Save to storage & clipboard
                 </button>
               )}
             </div>
@@ -184,12 +224,12 @@ export const ActionModal: React.FC<ActionModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!amount || busy}
+            disabled={!amount || busy || showMerkleInit}
             className={`w-full py-4 rounded-2xl text-lg font-bold transition-all ${
               mode === 'SECURE'
                 ? 'bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-900 shadow-lg shadow-emerald-500/20'
                 : 'bg-white text-slate-900'
-            } ${(!amount || busy) && 'opacity-50 cursor-not-allowed'}`}
+            } ${(!amount || busy || showMerkleInit) && 'opacity-50 cursor-not-allowed'}`}
           >
             {busy ? 'Working...' : mode === 'SECURE' ? 'Shield and Execute' : 'Execute'}
           </button>

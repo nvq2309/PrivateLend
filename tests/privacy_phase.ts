@@ -97,9 +97,9 @@ describe('Privacy Phase - SDK', () => {
     it('builds deterministic seed and hash', async () => {
       const timestamp = 1700000000000;
       const seed = buildNoteSeed({
-        timestamp,
         walletAddress,
         lastTxnId: '0',
+        timestamp,
       });
       expect(seed).to.equal(`${timestamp}:${walletAddress}:0`);
 
@@ -117,8 +117,11 @@ describe('Privacy Phase - SDK', () => {
     it('rotates note while preserving createdAt', async () => {
       const initial = await createInitialNoteRecord(walletAddress);
       const rotated = await rotateNoteRecord(walletAddress, 'tx-123', initial);
+      const expectedSeed = `${rotated.updatedAt}:${walletAddress}:tx-123`;
+      const expectedHash = await deriveNoteHash(expectedSeed);
       expect(rotated.walletAddress).to.equal(walletAddress);
       expect(rotated.lastTxnId).to.equal('tx-123');
+      expect(rotated.noteHash).to.equal(expectedHash);
       expect(rotated.createdAt).to.equal(initial.createdAt);
       expect(rotated.updatedAt).to.be.at.least(initial.updatedAt);
     });

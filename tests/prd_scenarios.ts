@@ -15,9 +15,12 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID
 } from "@solana/spl-token";
 import { expect } from "chai";
-import { x25519 } from '@arcium-hq/client';
-import { randomBytes } from 'crypto';
-import BN from 'bn.js';
+import {
+  createArciumClient,
+  encodeEncryptedBalance,
+  generateArciumKeypair,
+} from "../src/sdk/arcium";
+import BN from "bn.js";
 
 
 describe("VeilLend PRD Acceptance Tests", () => {
@@ -33,10 +36,11 @@ describe("VeilLend PRD Acceptance Tests", () => {
   const authority = provider.wallet;
 
   // Privacy / Encryption Mocks
-  const clientPrivateKey = x25519.utils.randomSecretKey();
-  const clientPublicKey = x25519.getPublicKey(clientPrivateKey);
-  const getEncryptedBalance = () => Array.from(randomBytes(32));
-  const getClientKey = () => Array.from(clientPublicKey);
+  const arciumKeypair = generateArciumKeypair();
+  const arciumClient = createArciumClient(arciumKeypair);
+  const getEncryptedBalance = (deposit: bigint, borrow: bigint) =>
+    encodeEncryptedBalance(arciumClient.encryptPosition(deposit, borrow));
+  const getClientKey = () => Array.from(arciumKeypair.publicKey);
 
   // PDAs and Accounts
   let collateralMint: PublicKey;
@@ -223,7 +227,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
   describe("PRD SCENARIO 1: User Deposit & Receipt Creation", () => {
     it("Deposits collateral and mints private receipt", async () => {
       const vaultBefore = await programAccounts.vault.fetch(vault);
-      const encryptedBalance = getEncryptedBalance();
+const encryptedBalance = getEncryptedBalance(BigInt(DEPOSIT_AMOUNT.toString()), 0n);
       const clientKey = getClientKey();
 
       await program.methods
@@ -258,7 +262,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
 
   describe("PRD SCENARIO 2: User Borrow Flow", () => {
     it("User borrows against collateral", async () => {
-        const encryptedBalance = getEncryptedBalance();
+const encryptedBalance = getEncryptedBalance(BigInt(DEPOSIT_AMOUNT.toString()), 0n);
         
         // Note: Kamino accounts are effectively mocked by passing random valid accounts 
         // as the program currently mocks the CPI call.
@@ -346,7 +350,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
 
   describe("PRD SCENARIO 3: User Repay & Withdrawal", () => {
       it("User repays debt", async () => {
-          const encryptedBalance = getEncryptedBalance();
+const encryptedBalance = getEncryptedBalance(
+  BigInt(DEPOSIT_AMOUNT.toString()),
+  BigInt(BORROW_AMOUNT.toString()),
+);
           
            const kaminoMarket = PublicKey.default;
            const kaminoObligation = PublicKey.default;
@@ -394,7 +401,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
       it("User fully repays remaining debt", async () => {
         const receipt = await programAccounts.userReceipt.fetch(userReceipt);
         const remaining = receipt.borrowedAmount;
-        const encryptedBalance = getEncryptedBalance();
+const encryptedBalance = getEncryptedBalance(
+  BigInt(DEPOSIT_AMOUNT.toString()),
+  BigInt(BORROW_AMOUNT.toString()),
+);
 
         if (remaining.toNumber() > 0) {
             const kaminoMarket = PublicKey.default;
@@ -439,7 +449,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
       });
 
       it("User withdraws collateral by burning receipt shares", async () => {
-          const encryptedBalance = getEncryptedBalance();
+const encryptedBalance = getEncryptedBalance(
+  BigInt(DEPOSIT_AMOUNT.toString()),
+  BigInt(BORROW_AMOUNT.toString()),
+);
           
           // Must have 0 debt now
         const receiptBefore = await programAccounts.userReceipt.fetch(userReceipt);

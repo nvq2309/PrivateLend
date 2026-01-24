@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::state::*;
@@ -74,6 +75,13 @@ pub fn deposit(
     let vault = &mut ctx.accounts.vault;
     let user_receipt = &mut ctx.accounts.user_receipt;
 
+    if is_zero_pubkey(&client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    if !is_zero_pubkey(&user_receipt.client_pubkey) && user_receipt.client_pubkey != client_pubkey {
+        return err!(VeilLendError::ArciumClientKeyMismatch);
+    }
+
     let shares_to_mint = if vault.total_shares == 0 || vault.total_collateral == 0 {
         amount
     } else {
@@ -98,11 +106,7 @@ pub fn deposit(
 
     let collateral_mint_key = ctx.accounts.collateral_mint.key();
     let bump = vault.bump;
-    let seeds = &[
-        VAULT_SEED,
-        collateral_mint_key.as_ref(),
-        &[bump],
-    ];
+    let seeds = &[VAULT_SEED, collateral_mint_key.as_ref(), &[bump]];
     let signer_seeds = &[&seeds[..]];
 
     let mint_ctx = CpiContext::new_with_signer(
@@ -143,7 +147,9 @@ pub fn deposit(
         .checked_add(amount)
         .ok_or(VeilLendError::MathOverflow)?;
     user_receipt.encrypted_balance = encrypted_balance;
-    user_receipt.client_pubkey = client_pubkey;
+    if is_zero_pubkey(&user_receipt.client_pubkey) {
+        user_receipt.client_pubkey = client_pubkey;
+    }
 
     emit!(DepositEvent {
         vault: vault.key(),

@@ -1,12 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount};
+use kamino_lend::cpi::accounts::{RefreshObligation, RefreshReserve, RepayObligationLiquidity};
 use kamino_lend::cpi::{refresh_obligation, refresh_reserve, repay_obligation_liquidity};
-use kamino_lend::cpi::accounts::{
-    RefreshObligation,
-    RefreshReserve,
-    RepayObligationLiquidity,
-};
 
+use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::state::*;
@@ -76,17 +73,17 @@ pub struct Repay<'info> {
     pub kamino_program: AccountInfo<'info>,
 }
 
-pub fn repay(
-    ctx: Context<Repay>,
-    amount: u64,
-    encrypted_balance: [u8; 32],
-) -> Result<()> {
+pub fn repay(ctx: Context<Repay>, amount: u64, encrypted_balance: [u8; 32]) -> Result<()> {
     require!(amount > 0, VeilLendError::InsufficientCollateral);
 
     let vault = &mut ctx.accounts.vault;
     let user_receipt = &mut ctx.accounts.user_receipt;
-    let repay_amount = amount.min(user_receipt.borrowed_amount);
-    require!(repay_amount > 0, VeilLendError::InsufficientCollateral);
+
+    if is_zero_pubkey(&user_receipt.client_pubkey) {
+        return err!(VeilLendError::ArciumClientKeyMissing);
+    }
+    let repay_amount = amount;
+    let principal_reduction = amount.min(user_receipt.borrowed_amount);
 
     if ctx.accounts.kamino_program.key() != Pubkey::default() {
         let refresh_reserve_ctx = CpiContext::new(
@@ -124,7 +121,10 @@ pub fn repay(
                 obligation: ctx.accounts.kamino_obligation.to_account_info(),
                 lending_market: ctx.accounts.kamino_market.to_account_info(),
                 repay_reserve: ctx.accounts.kamino_repay_reserve.to_account_info(),
-                reserve_liquidity_mint: ctx.accounts.kamino_reserve_liquidity_mint.to_account_info(),
+                reserve_liquidity_mint: ctx
+                    .accounts
+                    .kamino_reserve_liquidity_mint
+                    .to_account_info(),
                 reserve_destination_liquidity: ctx
                     .accounts
                     .kamino_reserve_destination_liquidity
@@ -152,11 +152,11 @@ pub fn repay(
 
     vault.total_borrowed = vault
         .total_borrowed
-        .checked_sub(repay_amount)
+        .checked_sub(principal_reduction)
         .ok_or(VeilLendError::MathOverflow)?;
     user_receipt.borrowed_amount = user_receipt
         .borrowed_amount
-        .checked_sub(repay_amount)
+        .checked_sub(principal_reduction)
         .ok_or(VeilLendError::MathOverflow)?;
     user_receipt.encrypted_balance = encrypted_balance;
 

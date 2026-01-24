@@ -6,14 +6,17 @@ const envCluster = import.meta.env.VITE_SOLANA_CLUSTER as VeilLendCluster | unde
 
 export const SOLANA_CLUSTER: VeilLendCluster = envCluster ?? 'localnet';
 
-export const SOLANA_ENDPOINT =
-  SOLANA_CLUSTER === 'localnet' ? 'http://127.0.0.1:8899' : clusterApiUrl('devnet');
-
 const normalizeEnv = (value?: string) => {
   if (!value) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 };
+
+const envRpcUrl = normalizeEnv(import.meta.env.VITE_SOLANA_RPC_URL);
+
+export const SOLANA_ENDPOINT =
+  envRpcUrl ??
+  (SOLANA_CLUSTER === 'localnet' ? 'http://127.0.0.1:8899' : clusterApiUrl('devnet'));
 
 const toPublicKey = (value: string | null) => (value ? new PublicKey(value) : null);
 

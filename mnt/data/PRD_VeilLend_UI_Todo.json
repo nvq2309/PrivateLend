@@ -16,7 +16,8 @@
       "max_active_notes_per_wallet": 1,
       "seed_formula": "seed = timestamp + walletAddress + lastTxnId (lastTxnId=0 for initial note)",
       "storage": "LOCAL_STORAGE",
-      "rotation": "after every successful SECURE action, lastTxnId becomes the new tx signature (or a deterministic tx id)"
+      "rotation": "after every successful SECURE action, lastTxnId becomes the new tx signature (or a deterministic tx id)",
+      "format": "veil-note-v1:<hex>"
     }
   },
   "implementation_plan": [
@@ -264,126 +265,371 @@
     {
       "id": "AT-NOTE-01",
       "category": "functional",
-      "description": "Each wallet has exactly one active note; seed rule uses timestamp + walletAddress + lastTxnId",
+      "description": "Each wallet has exactly one active note string; seed rule uses timestamp + walletAddress + lastTxnId",
       "steps": [
         "Connect wallet A",
         "Create initial note (lastTxnId=0)",
         "Perform SECURE Supply; capture new note",
         "Assert only one note is marked active in LOCAL_STORAGE for wallet A",
-        "Assert note seed inputs reflect (timestamp, walletAddress=A, lastTxnId=txid from previous action)"
+        "Assert note seed inputs reflect (timestamp, walletAddress=A, lastTxnId=txid from previous action)",
+        "Assert note string format is veil-note-v1:<hex>"
+      ],
+      "passes": false
+    },
+    {
+      "id": "AT-NOTE-EXPORT-01",
+      "category": "functional",
+      "description": "Save note to storage copies note string and stores access record for cross-wallet import",
+      "steps": [
+        "Perform a SECURE action that produces a new note",
+        "Click 'Save to storage & clipboard'",
+        "Verify clipboard contains the note string",
+        "Verify localStorage has veillend.note_access:{noteHash} with lastTxnId, privacyNotes, and secrets",
+        "Paste the note string in Import Existing Note on another wallet (with access record pre-synced)",
+        "Verify position appears for new wallet"
       ],
       "passes": true
     },
     {
-      "id": "AT-MERKLE-01",
+      "id": "AT-NOTE-EXPORT-02",
       "category": "functional",
-      "description": "SECURE deposit appends commitment to on-chain Merkle tree",
+      "description": "Aggregated positions derive from verified notes (supply/borrow totals)",
       "steps": [
-        "Initialize Merkle tree for the vault",
-        "Perform SECURE deposit",
-        "Fetch Merkle tree account and verify root updates",
-        "Verify leaf index increments"
+        "Create multiple SECURE actions to generate multiple notes",
+        "Verify aggregation uses verified note/proof state (not wallet balances)",
+        "Import note string with a pre-synced access record containing multiple notes",
+        "Verify Portfolio totals reflect aggregated borrow/supply"
       ],
       "passes": true
     },
     {
-      "id": "AT-NULLIFIER-01",
-      "category": "functional",
-      "description": "Nullifier prevents double-spend of a note",
+      "id": "AT-UI-001",
+      "category": "ui",
+      "description": "Markets dashboard renders with core cards and snapshots",
       "steps": [
-        "Perform SECURE borrow with merkle proof",
-        "Attempt another SECURE action with the same nullifier",
-        "Verify transaction fails with NullifierAlreadySpent"
+        "Open /?e2e=1",
+        "Verify VeilLend Markets and Vault Collateral",
+        "Capture snapshot"
       ],
       "passes": true
     },
     {
-      "id": "AT-SUPPLY-FAST-01",
-      "category": "functional",
-      "description": "Supply (FAST): routes directly to underlying lending adapter",
+      "id": "AT-UI-002",
+      "category": "ui",
+      "description": "Portfolio gate can create and store initial note with snapshots",
       "steps": [
-        "Connect wallet env.PUBLIC_WALLET",
-        "Open Supply page",
-        "Select FAST mode",
-        "Supply a small amount of SOL/USDC",
-        "Verify tx signature exists and adapter.supply called",
-        "Verify no note/proof UI is required"
-      ],
-      "passes": true
-    },
-    {
-      "id": "AT-SUPPLY-SECURE-01",
-      "category": "functional",
-      "description": "Supply (SECURE): generates ZK proof, returns a note, and Save-to-storage writes LOCAL_STORAGE",
-      "steps": [
-        "Connect wallet env.PUBLIC_WALLET",
-        "Open Supply page",
-        "Select SECURE mode",
-        "Start supply",
-        "Wait for proof generation step to complete",
-        "Verify UI shows proof blob (or proof hash) and a note",
-        "Click 'Save to storage'",
-        "Verify note is stored in LOCAL_STORAGE under wallet-specific key"
-      ],
-      "passes": true
-    },
-    {
-      "id": "AT-ACTIONS-PARITY-01",
-      "category": "functional",
-      "description": "Borrow/Repay/Withdraw each support FAST and SECURE modes with the same note/proof flow",
-      "steps": [
-        "From a wallet with an existing note, run Borrow in FAST mode; verify no proof UI",
-        "Run Borrow in SECURE mode; verify proof->note->optional local save",
-        "Repeat the above for Repay",
-        "Repeat the above for Withdraw"
-      ],
-      "passes": true
-    },
-    {
-      "id": "AT-PORTFOLIO-01",
-      "category": "functional",
-      "description": "Portfolio requires a note: if missing, require paste/import or create initial note",
-      "steps": [
-        "Clear LOCAL_STORAGE for the app domain",
         "Open Portfolio",
-        "Verify app blocks position display and prompts for note import or create initial note",
-        "Create initial note",
-        "Verify positions view becomes accessible"
+        "Generate Access Key and confirm",
+        "Verify VAULT UNLOCKED and note stored",
+        "Capture snapshots at each step"
       ],
       "passes": true
     },
     {
-      "id": "AT-CORE-LEND-01",
-      "category": "functional",
-      "description": "Deposit/Supply creates receipt/note and updates broker aggregate position",
+      "id": "AT-UI-003",
+      "category": "ui",
+      "description": "SECURE Supply SOL rotates note and shows proof",
       "steps": [
-        "Perform Supply",
-        "Verify receipt or note generated",
-        "Verify aggregate position (broker account) updates accordingly"
+        "Unlock vault",
+        "Supply SOL in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
       ],
-      "passes": false
+      "passes": true
     },
     {
-      "id": "AT-CORE-LEND-02",
-      "category": "functional",
-      "description": "Borrow delivers assets to user and updates debt",
+      "id": "AT-UI-004",
+      "category": "ui",
+      "description": "FAST Supply SOL completes without proof",
       "steps": [
-        "Perform Borrow",
-        "Verify user receives borrowed asset",
-        "Verify debt state increased in broker aggregate"
+        "Unlock vault",
+        "Supply SOL in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
       ],
-      "passes": false
+      "passes": true
     },
     {
-      "id": "AT-CORE-LEND-03",
-      "category": "functional",
-      "description": "Repay reduces debt and enables Withdraw when safe",
+      "id": "AT-UI-005",
+      "category": "ui",
+      "description": "SECURE Supply USDC rotates note and shows proof",
       "steps": [
-        "Perform Repay",
-        "Verify debt reduced",
-        "Attempt Withdraw; verify it is allowed only when safe"
+        "Unlock vault",
+        "Supply USDC in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
       ],
-      "passes": false
+      "passes": true
+    },
+    {
+      "id": "AT-UI-006",
+      "category": "ui",
+      "description": "FAST Supply USDC completes without proof",
+      "steps": [
+        "Unlock vault",
+        "Supply USDC in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-007",
+      "category": "ui",
+      "description": "SECURE Borrow USDC rotates note and shows proof",
+      "steps": [
+        "Unlock vault",
+        "Borrow USDC in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-008",
+      "category": "ui",
+      "description": "FAST Borrow USDC completes without proof",
+      "steps": [
+        "Unlock vault",
+        "Borrow USDC in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-009",
+      "category": "ui",
+      "description": "SECURE Borrow SOL rotates note and shows proof",
+      "steps": [
+        "Unlock vault",
+        "Borrow SOL in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-010",
+      "category": "ui",
+      "description": "FAST Borrow SOL completes without proof",
+      "steps": [
+        "Unlock vault",
+        "Borrow SOL in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-011",
+      "category": "ui",
+      "description": "SECURE Repay USDC rotates note and shows proof",
+      "steps": [
+        "Unlock vault",
+        "Repay USDC in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-012",
+      "category": "ui",
+      "description": "FAST Repay USDC completes without proof",
+      "steps": [
+        "Unlock vault",
+        "Repay USDC in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-013",
+      "category": "ui",
+      "description": "SECURE Withdraw SOL rotates note and shows proof",
+      "steps": [
+        "Unlock vault",
+        "Withdraw SOL in SECURE mode",
+        "Verify proof + new note",
+        "Save to storage & clipboard",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-014",
+      "category": "ui",
+      "description": "FAST Withdraw SOL completes without proof",
+      "steps": [
+        "Unlock vault",
+        "Withdraw SOL in FAST mode",
+        "Verify success message and no proof",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-015",
+      "category": "ui",
+      "description": "Supply SOL rejects amounts over max",
+      "steps": [
+        "Unlock vault",
+        "Attempt Supply SOL with amount > max",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-016",
+      "category": "ui",
+      "description": "Supply USDC rejects amounts over max",
+      "steps": [
+        "Unlock vault",
+        "Attempt Supply USDC with amount > max",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-017",
+      "category": "ui",
+      "description": "Borrow USDC rejects amounts above LTV",
+      "steps": [
+        "Seed deposit note",
+        "Attempt Borrow USDC beyond LTV",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-018",
+      "category": "ui",
+      "description": "Borrow SOL rejects amounts above LTV",
+      "steps": [
+        "Seed deposit note",
+        "Attempt Borrow SOL beyond LTV",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-019",
+      "category": "ui",
+      "description": "Repay rejects when no debt",
+      "steps": [
+        "Unlock vault",
+        "Attempt Repay with no debt",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-020",
+      "category": "ui",
+      "description": "Repay rejects amounts above max debt",
+      "steps": [
+        "Set E2E borrow balance override",
+        "Attempt Repay above debt",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-021",
+      "category": "ui",
+      "description": "Withdraw rejects amounts over max",
+      "steps": [
+        "Unlock vault",
+        "Attempt Withdraw above max",
+        "Verify max error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-022",
+      "category": "ui",
+      "description": "Invalid vault access JSON shows error",
+      "steps": [
+        "Open Portfolio gate",
+        "Paste invalid JSON",
+        "Verify error message",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-023",
+      "category": "ui",
+      "description": "Note hash import unlocks vault",
+      "steps": [
+        "Open Portfolio gate",
+        "Paste note hash",
+        "Verify vault unlocked",
+        "Capture snapshot"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-024",
+      "category": "ui",
+      "description": "Note hash export stores access record with secrets + privacy notes",
+      "steps": [
+        "Seed privacy notes",
+        "Perform SECURE action",
+        "Save to storage & clipboard",
+        "Verify clipboard contains the note hash",
+        "Verify veillend.note_access:{noteHash} contains secrets + privacy notes",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-025",
+      "category": "ui",
+      "description": "Note hash import restores notes from access record",
+      "steps": [
+        "Paste note hash (with access record pre-synced)",
+        "Verify vault unlocked and notes stored",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-026",
+      "category": "ui",
+      "description": "Two-wallet flow shares notes and positions",
+      "steps": [
+        "Wallet 1 performs supply/borrow/repay and exports note",
+        "Wallet 2 imports note and sees positions",
+        "Wallet 2 performs follow-up supply",
+        "Capture snapshots"
+      ],
+      "passes": true
+    },
+    {
+      "id": "AT-UI-027",
+      "category": "ui",
+      "description": "Client-side aggregation sums privacy notes",
+      "steps": [
+        "Seed privacy notes",
+        "Verify total deposit/borrow sum",
+        "Capture snapshot"
+      ],
+      "passes": true
     }
   ]
 }

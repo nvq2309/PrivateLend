@@ -1,4 +1,4 @@
-import { concat, sha256 } from './commitment';
+import { poseidonHashBytes } from './poseidon';
 
 export type MerkleProof = {
   proof: Uint8Array[];
@@ -7,7 +7,7 @@ export type MerkleProof = {
 };
 
 const hashPair = async (left: Uint8Array, right: Uint8Array): Promise<Uint8Array> => {
-  return sha256(concat(left, right));
+  return poseidonHashBytes([left, right]);
 };
 
 const computeZeroHashes = async (depth: number): Promise<Uint8Array[]> => {

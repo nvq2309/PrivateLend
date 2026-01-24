@@ -30,7 +30,8 @@ export class TestWalletAdapter extends BaseWalletAdapter<'TestWallet'> {
 
   constructor() {
     super();
-    this.keypair = Keypair.generate();
+    const overrideSecret = this.getOverrideSecret();
+    this.keypair = overrideSecret ? Keypair.fromSecretKey(overrideSecret) : Keypair.generate();
     this.publicKey = this.keypair.publicKey;
     if (typeof window !== 'undefined') {
       (window as Window & { __VEILLEND_TEST_WALLET__?: string }).__VEILLEND_TEST_WALLET__ =
@@ -38,12 +39,21 @@ export class TestWalletAdapter extends BaseWalletAdapter<'TestWallet'> {
     }
   }
 
+  private getOverrideSecret(): Uint8Array | null {
+    if (typeof window === 'undefined') return null;
+    const raw = (window as Window & { __VEILLEND_E2E_WALLET_SECRET__?: number[] })
+      .__VEILLEND_E2E_WALLET_SECRET__;
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    return new Uint8Array(raw);
+  }
+
   async connect(): Promise<void> {
     if (this.connected || this.connecting) return;
     this.connecting = true;
     try {
       if (!this.keypair) {
-        this.keypair = Keypair.generate();
+        const overrideSecret = this.getOverrideSecret();
+        this.keypair = overrideSecret ? Keypair.fromSecretKey(overrideSecret) : Keypair.generate();
       }
       this.publicKey = this.keypair.publicKey;
       if (typeof window !== 'undefined') {
