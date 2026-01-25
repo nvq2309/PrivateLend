@@ -96,4 +96,4 @@ template Withdraw(depth) {
   publicNewCommitment === newCommitment;
 }
 
-component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Withdraw(8);
+component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Withdraw(4);

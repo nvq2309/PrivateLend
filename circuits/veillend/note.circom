@@ -42,7 +42,8 @@ template NullifierHash() {
   signal input nullifier;
   signal output nullifierHash;
 
-  component hash = Poseidon(1);
+  component hash = Poseidon(2);
   hash.inputs[0] <== nullifier;
+  hash.inputs[1] <== 0;
   nullifierHash <== hash.out;
 }

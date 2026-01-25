@@ -81,4 +81,4 @@ template Supply(depth) {
   publicNewCommitment === newCommitment;
 }
 
-component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Supply(8);
+component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Supply(4);

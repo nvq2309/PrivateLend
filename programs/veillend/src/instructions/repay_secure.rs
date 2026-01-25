@@ -8,6 +8,7 @@ use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, verify_merkle_proof};
 use crate::state::*;
+use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16Proof, ZkAction};
 
 #[derive(Accounts)]
 #[instruction(
@@ -16,7 +17,9 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
+    proof: Groth16Proof,
+    merkle_proof: Vec<[u8; 32]>,
+    merkle_path: Vec<u8>,
 )]
 pub struct RepaySecure<'info> {
     #[account(mut)]
@@ -31,43 +34,13 @@ pub struct RepaySecure<'info> {
 
     #[account(
         mut,
-        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_receipt.note_hash.as_ref()],
         bump = note_receipt.bump,
     )]
     pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
     #[account(mut)]
     pub user_repay_account: Box<Account<'info, TokenAccount>>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_market: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_obligation: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_repay_reserve: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_reserve_liquidity_mint: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_reserve_destination_liquidity: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_instruction_sysvar_account: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_pyth_oracle: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_switchboard_price_oracle: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_switchboard_twap_oracle: AccountInfo<'info>,
-
-    /// CHECK: validated via Kamino program
-    pub kamino_scope_prices: AccountInfo<'info>,
 
     #[account(
         mut,
@@ -93,19 +66,16 @@ pub struct RepaySecure<'info> {
     pub repay_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
-
-    /// CHECK: Kamino lending program
-    pub kamino_program: AccountInfo<'info>,
 }
 
-pub fn repay_secure(
-    ctx: Context<RepaySecure>,
+pub fn repay_secure<'info>(
+    ctx: Context<'_, '_, '_, 'info, RepaySecure<'info>>,
     amount: u64,
     encrypted_balance: [u8; 32],
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
+    proof: Groth16Proof,
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -120,9 +90,15 @@ pub fn repay_secure(
     if is_zero_pubkey(&note_receipt.client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
     }
-    if note_receipt.note_hash != note_hash {
-        return err!(VeilLendError::InvalidNoteHash);
-    }
+
+    let nullifier_hash = poseidon_nullifier_hash(&nullifier)?;
+    let public_inputs = [
+        ctx.accounts.merkle_tree.root,
+        nullifier_hash,
+        current_commitment,
+        new_commitment,
+    ];
+    verify_groth16_proof(ZkAction::Repay, &proof, &public_inputs)?;
 
     require!(
         ctx.accounts.merkle_tree.vault == vault.key(),
@@ -138,56 +114,54 @@ pub fn repay_secure(
         return err!(VeilLendError::NullifierAlreadySpent);
     }
 
-    if ctx.accounts.kamino_program.key() != Pubkey::default() {
+    if !ctx.remaining_accounts.is_empty() {
+        let kamino_market = &ctx.remaining_accounts[0];
+        let kamino_obligation = &ctx.remaining_accounts[1];
+        let kamino_repay_reserve = &ctx.remaining_accounts[2];
+        let kamino_reserve_liquidity_mint = &ctx.remaining_accounts[3];
+        let kamino_reserve_destination_liquidity = &ctx.remaining_accounts[4];
+        let kamino_instruction_sysvar_account = &ctx.remaining_accounts[5];
+        let kamino_pyth_oracle = &ctx.remaining_accounts[6];
+        let kamino_switchboard_price_oracle = &ctx.remaining_accounts[7];
+        let kamino_switchboard_twap_oracle = &ctx.remaining_accounts[8];
+        let kamino_scope_prices = &ctx.remaining_accounts[9];
+        let kamino_program = &ctx.remaining_accounts[10];
+
         let refresh_reserve_ctx = CpiContext::new(
-            ctx.accounts.kamino_program.to_account_info(),
+            kamino_program.to_account_info(),
             RefreshReserve {
-                reserve: ctx.accounts.kamino_repay_reserve.to_account_info(),
-                lending_market: ctx.accounts.kamino_market.to_account_info(),
-                pyth_oracle: ctx.accounts.kamino_pyth_oracle.to_account_info(),
-                switchboard_price_oracle: ctx
-                    .accounts
-                    .kamino_switchboard_price_oracle
-                    .to_account_info(),
-                switchboard_twap_oracle: ctx
-                    .accounts
-                    .kamino_switchboard_twap_oracle
-                    .to_account_info(),
-                scope_prices: ctx.accounts.kamino_scope_prices.to_account_info(),
+                reserve: kamino_repay_reserve.to_account_info(),
+                lending_market: kamino_market.to_account_info(),
+                pyth_oracle: kamino_pyth_oracle.to_account_info(),
+                switchboard_price_oracle: kamino_switchboard_price_oracle.to_account_info(),
+                switchboard_twap_oracle: kamino_switchboard_twap_oracle.to_account_info(),
+                scope_prices: kamino_scope_prices.to_account_info(),
             },
         );
         refresh_reserve(refresh_reserve_ctx)?;
 
         let refresh_obligation_ctx = CpiContext::new(
-            ctx.accounts.kamino_program.to_account_info(),
+            kamino_program.to_account_info(),
             RefreshObligation {
-                lending_market: ctx.accounts.kamino_market.to_account_info(),
-                obligation: ctx.accounts.kamino_obligation.to_account_info(),
+                lending_market: kamino_market.to_account_info(),
+                obligation: kamino_obligation.to_account_info(),
             },
         );
         refresh_obligation(refresh_obligation_ctx)?;
 
         let repay_ctx = CpiContext::new(
-            ctx.accounts.kamino_program.to_account_info(),
+            kamino_program.to_account_info(),
             RepayObligationLiquidity {
                 owner: ctx.accounts.user.to_account_info(),
-                obligation: ctx.accounts.kamino_obligation.to_account_info(),
-                lending_market: ctx.accounts.kamino_market.to_account_info(),
-                repay_reserve: ctx.accounts.kamino_repay_reserve.to_account_info(),
-                reserve_liquidity_mint: ctx
-                    .accounts
-                    .kamino_reserve_liquidity_mint
-                    .to_account_info(),
-                reserve_destination_liquidity: ctx
-                    .accounts
-                    .kamino_reserve_destination_liquidity
+                obligation: kamino_obligation.to_account_info(),
+                lending_market: kamino_market.to_account_info(),
+                repay_reserve: kamino_repay_reserve.to_account_info(),
+                reserve_liquidity_mint: kamino_reserve_liquidity_mint.to_account_info(),
+                reserve_destination_liquidity: kamino_reserve_destination_liquidity
                     .to_account_info(),
                 user_source_liquidity: ctx.accounts.user_repay_account.to_account_info(),
                 token_program: ctx.accounts.token_program.to_account_info(),
-                instruction_sysvar_account: ctx
-                    .accounts
-                    .kamino_instruction_sysvar_account
-                    .to_account_info(),
+                instruction_sysvar_account: kamino_instruction_sysvar_account.to_account_info(),
             },
         );
         repay_obligation_liquidity(repay_ctx, repay_amount)?;

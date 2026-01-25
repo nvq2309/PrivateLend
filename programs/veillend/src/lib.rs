@@ -6,6 +6,8 @@ pub mod errors;
 pub mod instructions;
 pub mod merkle;
 pub mod state;
+pub mod zk_keys;
+pub mod zk_verifier;
 
 use instructions::*;
 
@@ -72,6 +74,7 @@ pub mod veillend {
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
         note_hash: [u8; 32],
+        proof: zk_verifier::Groth16Proof,
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -83,6 +86,7 @@ pub mod veillend {
             new_commitment,
             nullifier,
             note_hash,
+            proof,
             merkle_proof,
             merkle_path,
         )
@@ -103,7 +107,7 @@ pub mod veillend {
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
-        note_hash: [u8; 32],
+        proof: zk_verifier::Groth16Proof,
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -114,7 +118,7 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
-            note_hash,
+            proof,
             merkle_proof,
             merkle_path,
         )
@@ -124,14 +128,14 @@ pub mod veillend {
         instructions::borrow::borrow(ctx, amount, encrypted_balance)
     }
 
-    pub fn borrow_secure(
-        ctx: Context<BorrowSecure>,
+    pub fn borrow_secure<'info>(
+        ctx: Context<'_, '_, '_, 'info, BorrowSecure<'info>>,
         amount: u64,
         encrypted_balance: [u8; 32],
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
-        note_hash: [u8; 32],
+        proof: zk_verifier::Groth16Proof,
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -142,7 +146,7 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
-            note_hash,
+            proof,
             merkle_proof,
             merkle_path,
         )
@@ -152,14 +156,14 @@ pub mod veillend {
         instructions::repay::repay(ctx, amount, encrypted_balance)
     }
 
-    pub fn repay_secure(
-        ctx: Context<RepaySecure>,
+    pub fn repay_secure<'info>(
+        ctx: Context<'_, '_, '_, 'info, RepaySecure<'info>>,
         amount: u64,
         encrypted_balance: [u8; 32],
         current_commitment: [u8; 32],
         new_commitment: [u8; 32],
         nullifier: [u8; 32],
-        note_hash: [u8; 32],
+        proof: zk_verifier::Groth16Proof,
         merkle_proof: Vec<[u8; 32]>,
         merkle_path: Vec<u8>,
     ) -> Result<()> {
@@ -170,7 +174,7 @@ pub mod veillend {
             current_commitment,
             new_commitment,
             nullifier,
-            note_hash,
+            proof,
             merkle_proof,
             merkle_path,
         )

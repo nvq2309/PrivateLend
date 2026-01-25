@@ -7,6 +7,7 @@ use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, spend_note};
 use crate::state::*;
+use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16Proof, ZkAction};
 
 #[derive(Accounts)]
 #[instruction(
@@ -16,6 +17,9 @@ use crate::state::*;
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
     note_hash: [u8; 32],
+    proof: Groth16Proof,
+    merkle_proof: Vec<[u8; 32]>,
+    merkle_path: Vec<u8>,
 )]
 pub struct DepositSecureSpend<'info> {
     #[account(mut)]
@@ -94,6 +98,7 @@ pub fn deposit_secure_spend(
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
     note_hash: [u8; 32],
+    proof: Groth16Proof,
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -109,6 +114,15 @@ pub fn deposit_secure_spend(
     if note_receipt.note_hash != note_hash {
         return err!(VeilLendError::InvalidNoteHash);
     }
+
+    let nullifier_hash = poseidon_nullifier_hash(&nullifier)?;
+    let public_inputs = [
+        ctx.accounts.merkle_tree.root,
+        nullifier_hash,
+        current_commitment,
+        new_commitment,
+    ];
+    verify_groth16_proof(ZkAction::Supply, &proof, &public_inputs)?;
 
     let shares_to_mint = if vault.total_shares == 0 || vault.total_collateral == 0 {
         amount

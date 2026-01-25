@@ -3145,7 +3145,6 @@ dependencies = [
  "anchor-spl",
  "kamino-lend",
  "solana-poseidon",
- "solana-sha256-hasher",
 ]
 
 [[package]]

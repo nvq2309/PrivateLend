@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use solana_poseidon::{hashv, Endianness, Parameters};
 
-use crate::constants::MERKLE_TREE_DEPTH;
+use crate::constants::{DEFAULT_NOTE_COMMITMENT, MERKLE_TREE_DEPTH};
 use crate::errors::VeilLendError;
 use crate::state::{MerkleTree, Nullifier};
 
@@ -13,7 +13,7 @@ fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> Result<[u8; 32]> {
 
 fn compute_zero_hashes(depth: usize) -> Result<Vec<[u8; 32]>> {
     let mut hashes = Vec::with_capacity(depth + 1);
-    hashes.push([0u8; 32]);
+    hashes.push(DEFAULT_NOTE_COMMITMENT);
     for i in 0..depth {
         let next = hash_pair(&hashes[i], &hashes[i])?;
         hashes.push(next);

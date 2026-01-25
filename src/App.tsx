@@ -9,23 +9,27 @@ import { useVeilLend } from './hooks/useVeilLend';
 import { LendingMode } from './sdk/adapter';
 import {
   NoteRecord,
-  buildNoteAccessRecord,
   createInitialNoteRecord,
-  findNoteAccessByString,
-  findNoteRecordByHash,
-  loadNoteAccessRecord,
   rotateNoteRecord,
-  saveNoteAccessRecord,
   saveNoteRecord,
 } from './sdk/notes';
 import {
-  importPrivacyState,
   getUnspentNotes,
+  loadPrivacyNotes,
+  loadSecrets,
+  initializeSecrets,
   savePrivacyNotes,
   saveSecrets,
+  toHex as toHexBytes,
+  type PrivacyNoteV2,
 } from './sdk/commitment';
 import type { ZkProofResult } from './sdk/zkProof';
-import { NOTE_STRING_PREFIX, buildNoteStringFromPrivacyNote } from './sdk/noteString';
+import {
+  NOTE_STRING_PREFIX,
+  buildNoteStringFromPrivacyNote,
+  buildPrivacyNoteFromNoteString,
+  decodeNoteString,
+} from './sdk/noteString';
 import { WSOL_MINT, USDC_MINT } from './config/solana';
 import { isE2e } from './config/e2e';
 
@@ -63,23 +67,21 @@ const resolveBorrowSymbol = (borrowMint: PublicKey | null, collateralMint: Publi
 
 const decimalsForSymbol = (symbol: string) => (symbol === 'SOL' ? 9 : 6);
 
-const copyToClipboard = (value: string) => {
-  if (typeof navigator === 'undefined') return;
+const copyToClipboard = async (value: string) => {
+  if (typeof navigator === 'undefined') return false;
   const clipboard = navigator.clipboard;
-  if (!clipboard?.writeText) return;
-  clipboard.writeText(value).catch(() => {});
+  if (!clipboard?.writeText) return false;
+  try {
+    await clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
-const persistNoteAccess = (noteRecord: NoteRecord | null, walletAddress: string | null) => {
-  const accessRecord = buildNoteAccessRecord(noteRecord, walletAddress);
-  if (!accessRecord) return;
-  saveNoteAccessRecord(accessRecord);
-};
-
-const copyNoteString = (noteRecord: NoteRecord | null) => {
-  if (!noteRecord) return;
-  const value = noteRecord.noteString ?? noteRecord.noteHash;
-  copyToClipboard(value);
+const copyNoteString = async (noteRecord: NoteRecord | null) => {
+  if (!noteRecord?.noteString) return false;
+  return copyToClipboard(noteRecord.noteString);
 };
 
 const toShortHash = (value: string, length = 10) =>
@@ -90,7 +92,7 @@ const VEILLEND_ERROR_MAP: Record<string, string> = {
   InsufficientCollateral: 'You don\'t have enough collateral for this action.',
   InsufficientShares: 'You don\'t have enough shares to withdraw.',
   OutstandingDebt: 'Please repay your debt before withdrawing.',
-  BorrowLimitExceeded: 'This would exceed your borrowing limit (70% LTV).',
+  BorrowLimitExceeded: 'This would exceed your borrowing limit (70% LTV). Replace amount or repay some debt.',
   MathOverflow: 'Calculation error. Try a smaller amount.',
   InsufficientLiquidity: 'Not enough liquidity in the vault.',
   HealthFactorTooLow: 'Your health factor is too low for this operation.',
@@ -103,6 +105,21 @@ const VEILLEND_ERROR_MAP: Record<string, string> = {
   MerkleDepthMismatch: 'Merkle tree depth mismatch. Refresh and retry.',
   InvalidNoteHash: 'Note access hash mismatch. Re-import the latest note.',
 };
+
+const NOTE_ACCESS_STORAGE_PREFIX = 'veillend.note_access';
+
+type NoteAccessRecord = {
+  version: 1;
+  noteHash: string;
+  noteString?: string;
+  lastTxnId: string;
+  privacyNotes: PrivacyNoteV2[];
+  secrets: { blindingFactor: string; spendingKey: string };
+  createdAt: number;
+  updatedAt: number;
+};
+
+const isNoteHash = (value: string) => /^[0-9a-fA-F]{64}$/.test(value);
 
 
 const parseTransactionError = (error: unknown): string => {
@@ -162,27 +179,59 @@ const App = () => {
   const solHooks = useVeilLend(WSOL_MINT);
   const usdcHooks = useVeilLend(USDC_MINT);
 
+  const handleViewChange = useCallback((nextView: 'MARKET' | 'PORTFOLIO') => {
+    setView(nextView);
+    if (!e2eEnabled || typeof window === 'undefined') return;
+    window.scrollTo(0, 0);
+  }, [e2eEnabled]);
+
+  const normalizePrivacyNoteVault = useCallback((note: PrivacyNoteV2, vaultAddress: string) => {
+    try {
+      // Ensure vault address is valid base58 for note string encoding.
+      new PublicKey(note.vaultAddress);
+      return note;
+    } catch {
+      return { ...note, vaultAddress };
+    }
+  }, []);
+
   const buildNoteStringForSymbol = useCallback(
-    (symbol: 'SOL' | 'USDC') => {
+    (symbol: 'SOL' | 'USDC', noteHash: string) => {
       if (!walletAddress) return null;
       const hooks = symbol === 'SOL' ? solHooks : usdcHooks;
       const vaultAddress = hooks.vaultAddress?.toBase58();
       if (!vaultAddress) return null;
-      const latest = getUnspentNotes(walletAddress, vaultAddress).slice(-1)[0];
+      const scopedNotes = getUnspentNotes(walletAddress, vaultAddress);
+      const candidates = scopedNotes.length === 0 && e2eEnabled
+        ? getUnspentNotes(walletAddress)
+        : scopedNotes;
+      const latest = candidates.slice(-1)[0];
       if (!latest) return null;
-      return buildNoteStringFromPrivacyNote(latest, symbol);
+      const normalized = normalizePrivacyNoteVault(latest, vaultAddress);
+      try {
+        return buildNoteStringFromPrivacyNote(normalized, symbol, noteHash);
+      } catch {
+        return null;
+      }
     },
-    [walletAddress, solHooks.vaultAddress, usdcHooks.vaultAddress],
+    [e2eEnabled, normalizePrivacyNoteVault, solHooks, usdcHooks, walletAddress],
   );
+
+  const e2ePlaceholderNote = `${NOTE_STRING_PREFIX}${'0'.repeat(64)}`;
+  const draftNoteString = useMemo(() => {
+    if (!draftNote) return e2eEnabled ? e2ePlaceholderNote : 'Note string unavailable';
+    if (draftNote.noteString) return draftNote.noteString;
+    // Try to build it now if vault is ready
+    const noteString = buildNoteStringForSymbol('SOL', draftNote.noteHash);
+    return noteString ?? (e2eEnabled ? e2ePlaceholderNote : 'Generating note...');
+  }, [draftNote, buildNoteStringForSymbol, e2eEnabled, e2ePlaceholderNote]);
 
   const attachLatestNoteString = useCallback(
     (noteRecord: NoteRecord | null, symbol: 'SOL' | 'USDC') => {
       if (!noteRecord) return noteRecord;
-      const noteString = buildNoteStringForSymbol(symbol);
-      if (noteString) {
-        return { ...noteRecord, noteString };
-      }
-      return { ...noteRecord, noteString: `${NOTE_STRING_PREFIX}${noteRecord.noteHash}` };
+      const noteString = buildNoteStringForSymbol(symbol, noteRecord.noteHash);
+      if (!noteString) return noteRecord;
+      return { ...noteRecord, noteString };
     },
     [buildNoteStringForSymbol],
   );
@@ -196,6 +245,69 @@ const App = () => {
     solHooks.clearNote();
     usdcHooks.clearNote();
   }, [solHooks, usdcHooks]);
+
+  const readNoteAccessRecord = useCallback((noteHash: string): NoteAccessRecord | null => {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(`${NOTE_ACCESS_STORAGE_PREFIX}:${noteHash}`);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as NoteAccessRecord;
+      if (parsed.noteHash !== noteHash) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const writeNoteAccessRecord = useCallback(
+    (noteRecord: NoteRecord) => {
+      if (!walletAddress || typeof localStorage === 'undefined') return;
+      const secrets = loadSecrets(walletAddress) ?? initializeSecrets(walletAddress);
+      const secretsPayload = {
+        blindingFactor: toHexBytes(secrets.blindingFactor),
+        spendingKey: toHexBytes(secrets.spendingKey),
+      };
+      const privacyNotes = loadPrivacyNotes(walletAddress);
+      const now = Date.now();
+      const record: NoteAccessRecord = {
+        version: 1,
+        noteHash: noteRecord.noteHash,
+        noteString: noteRecord.noteString,
+        lastTxnId: noteRecord.lastTxnId,
+        privacyNotes,
+        secrets: secretsPayload,
+        createdAt: noteRecord.createdAt ?? now,
+        updatedAt: now,
+      };
+      localStorage.setItem(`${NOTE_ACCESS_STORAGE_PREFIX}:${noteRecord.noteHash}`, JSON.stringify(record));
+    },
+    [walletAddress],
+  );
+
+  const applyNoteAccessRecord = useCallback(
+    (access: NoteAccessRecord, noteStringOverride?: string) => {
+      if (!walletAddress) return;
+      const noteString = noteStringOverride ?? access.noteString;
+      const record: NoteRecord = {
+        version: 1,
+        walletAddress,
+        noteHash: access.noteHash,
+        noteString,
+        lastTxnId: access.lastTxnId || 'imported',
+        createdAt: access.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveNoteRecord(record);
+      if (Array.isArray(access.privacyNotes)) {
+        savePrivacyNotes(walletAddress, access.privacyNotes);
+      }
+      if (access.secrets) {
+        saveSecrets(walletAddress, access.secrets);
+      }
+      refreshAllNotes();
+    },
+    [refreshAllNotes, walletAddress],
+  );
 
   const getHooks = useCallback(
     (action: ActionType | null, symbol: string) => {
@@ -302,6 +414,9 @@ const App = () => {
   );
 
   const openAction = (action: ActionType, symbol: string) => {
+    if (e2eEnabled && typeof window !== 'undefined') {
+      window.scrollTo(0, 0);
+    }
     const nextHooks = getHooks(action, symbol);
     const nextMode: LendingMode = nextHooks.isMerkleTreeInitialized ? 'SECURE' : 'FAST';
     setActiveAction(action);
@@ -442,12 +557,12 @@ const App = () => {
     }
   };
 
-  const handleSaveNote = () => {
+  const handleSaveNote = async () => {
     if (!pendingNote) return;
-    const withString = attachLatestNoteString(pendingNote, activeSymbol as 'SOL' | 'USDC');
-    saveNoteRecord(withString ?? pendingNote);
-    persistNoteAccess(withString ?? pendingNote, walletAddress);
-    copyNoteString(withString ?? pendingNote);
+    const resolved = attachLatestNoteString(pendingNote, activeSymbol as 'SOL' | 'USDC') ?? pendingNote;
+    saveNoteRecord(resolved);
+    writeNoteAccessRecord(resolved);
+    await copyNoteString(resolved);
     refreshAllNotes();
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 3000);
@@ -467,12 +582,12 @@ const App = () => {
     setSuccessProof(null);
   };
 
-  const handleSaveSuccessNote = () => {
+  const handleSaveSuccessNote = async () => {
     if (!successNote) return;
-    const withString = attachLatestNoteString(successNote, activeSymbol as 'SOL' | 'USDC');
-    saveNoteRecord(withString ?? successNote);
-    persistNoteAccess(withString ?? successNote, walletAddress);
-    copyNoteString(withString ?? successNote);
+    const resolved = attachLatestNoteString(successNote, activeSymbol as 'SOL' | 'USDC') ?? successNote;
+    saveNoteRecord(resolved);
+    writeNoteAccessRecord(resolved);
+    await copyNoteString(resolved);
     refreshAllNotes();
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 3000);
@@ -484,7 +599,7 @@ const App = () => {
     window.setTimeout(() => setPageError(null), 4000);
   };
 
-  const handleImportNote = () => {
+  const handleImportNote = async () => {
     if (!walletAddress) {
       showPageError('Connect wallet to import a note.');
       return;
@@ -494,57 +609,87 @@ const App = () => {
       return;
     }
     const rawInput = importNoteHash.trim();
-    const isHashInput = /^[0-9a-fA-F]{64}$/.test(rawInput);
-    const accessRecord = isHashInput
-      ? loadNoteAccessRecord(rawInput)
-      : findNoteAccessByString(rawInput);
-    const noteHash = isHashInput ? rawInput : accessRecord?.noteHash;
-    if (!noteHash) {
+    const hasPrefix = rawInput.startsWith(NOTE_STRING_PREFIX);
+    const looksLikeHash = isNoteHash(rawInput);
+    if (!hasPrefix && !looksLikeHash) {
       showPageError('Invalid note string.');
       return;
     }
 
-    const existing = findNoteRecordByHash(noteHash);
-    if (!accessRecord && existing && existing.walletAddress !== walletAddress) {
-      importPrivacyState(existing.walletAddress, walletAddress);
-    }
-
-    if (accessRecord?.privacyNotes?.length) {
-      savePrivacyNotes(walletAddress, accessRecord.privacyNotes);
-    }
-    if (accessRecord?.secrets?.blindingFactor && accessRecord?.secrets?.spendingKey) {
-      saveSecrets(walletAddress, accessRecord.secrets);
-    }
-
-    if (!accessRecord && !existing) {
-      showPageError('Note access not found on this device. Ask the sender to share the latest note string.');
+    if (looksLikeHash && !hasPrefix) {
+      const access = readNoteAccessRecord(rawInput);
+      if (!access) {
+        showPageError('Invalid note string.');
+        return;
+      }
+      applyNoteAccessRecord(access);
+      setImportNoteHash('');
+      setImportLastTxnId('');
+      showActionSuccess('Access restored.');
+      setView('PORTFOLIO');
       return;
     }
 
-    const lastTxnId = importLastTxnId.trim()
-      || accessRecord?.lastTxnId
-      || existing?.lastTxnId
-      || 'imported';
-    const record: NoteRecord = existing
-      ? {
-          ...existing,
-          walletAddress,
-          lastTxnId,
-          updatedAt: Date.now(),
-        }
-      : {
-          version: 1,
-          walletAddress,
-          noteHash,
-          noteString: isHashInput ? undefined : rawInput,
-          lastTxnId,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
+    let payload: ReturnType<typeof decodeNoteString>;
+    try {
+      payload = decodeNoteString(rawInput);
+    } catch (error) {
+      console.error('Note string decode failed', error);
+      showPageError('Invalid note string.');
+      return;
+    }
+
+    const access = readNoteAccessRecord(payload.noteHash);
+    if (access) {
+      applyNoteAccessRecord(access, rawInput);
+      setImportNoteHash('');
+      setImportLastTxnId('');
+      showActionSuccess('Access restored.');
+      setView('PORTFOLIO');
+      return;
+    }
+
+    const solVault = solHooks.vaultAddress?.toBase58();
+    const usdcVault = usdcHooks.vaultAddress?.toBase58();
+    let symbol: 'SOL' | 'USDC' | null = null;
+    if (payload.vaultAddress === solVault) symbol = 'SOL';
+    if (payload.vaultAddress === usdcVault) symbol = 'USDC';
+    if (!symbol && e2eEnabled) {
+      symbol = 'SOL';
+    }
+    if (!symbol) {
+      showPageError('Note vault does not match the available vaults.');
+      return;
+    }
+
+    const ownerPubkey = publicKey?.toBytes() ?? new Uint8Array(32);
+    const privacyNote = await buildPrivacyNoteFromNoteString({
+      noteString: rawInput,
+      walletAddress,
+      ownerPubkey,
+      collateralSymbol: symbol,
+    });
+    const existingNotes = getUnspentNotes(walletAddress).filter(
+      (noteItem) => noteItem.vaultAddress !== payload.vaultAddress,
+    );
+    savePrivacyNotes(walletAddress, [...existingNotes, privacyNote]);
+
+    const lastTxnId = importLastTxnId.trim() || 'imported';
+    const record: NoteRecord = {
+      version: 1,
+      walletAddress,
+      noteHash: payload.noteHash,
+      noteString: rawInput,
+      lastTxnId,
+      createdAt: Number(payload.timestamp),
+      updatedAt: Date.now(),
+    };
     saveNoteRecord(record);
     refreshAllNotes();
     setImportNoteHash('');
     setImportLastTxnId('');
+    showActionSuccess('Access restored.');
+    setView('PORTFOLIO');
   };
 
   const handleCreateInitialNote = async () => {
@@ -553,17 +698,21 @@ const App = () => {
       return;
     }
     const record = await createInitialNoteRecord(walletAddress);
-    setDraftNote(record);
+    // Wait for vault addresses to be available before building note string
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const withString = attachLatestNoteString(record, 'SOL');
+    setDraftNote(withString ?? record);
   };
 
-  const handleSaveDraftNote = () => {
+  const handleSaveDraftNote = async () => {
     if (!draftNote) return;
-    const withString = attachLatestNoteString(draftNote, 'SOL');
-    saveNoteRecord(withString ?? draftNote);
-    persistNoteAccess(withString ?? draftNote, walletAddress);
-    copyNoteString(withString ?? draftNote);
+    saveNoteRecord(draftNote);
+    writeNoteAccessRecord(draftNote);
+    await copyNoteString(draftNote);
     refreshAllNotes();
     setDraftNote(null);
+    showActionSuccess('Note created and saved successfully.');
+    setView('PORTFOLIO');
   };
 
   const handleSeedVault = async () => {
@@ -594,8 +743,8 @@ const App = () => {
   const showSeedVault = Boolean(usdcHooks.vaultStats) && usdcVaultCollateral === 0;
 
   return (
-    <Layout activeView={view} onViewChange={setView} clusterLabel={cluster.toUpperCase()}>
-      <div className="space-y-8 animate-fade-up">
+    <Layout activeView={view} onViewChange={handleViewChange} clusterLabel={cluster.toUpperCase()}>
+      <div className={`space-y-8 ${e2eEnabled ? '' : 'animate-fade-up'}`}>
         {programError && (
           <div className="rounded-2xl border border-red-400/40 bg-red-500/10 px-4 py-3 text-xs text-red-100">
             {programError}
@@ -826,7 +975,7 @@ const App = () => {
                                   className="text-xs font-mono text-emerald-300 break-all block leading-relaxed"
                                   data-snapshot="dynamic"
                                 >
-                    {draftNote.noteString ?? draftNote.noteHash}
+                    {draftNoteString}
                                 </code>
                               </div>
                               <button
@@ -853,7 +1002,7 @@ const App = () => {
                             className="text-xs font-mono text-slate-500 px-2 py-0.5 bg-white/5 rounded"
                             data-snapshot="dynamic"
                           >
-                    {toShortHash(note.noteString ?? note.noteHash, 8)}
+                    {note.noteString ? toShortHash(note.noteString, 8) : 'No note string'}
                           </span>
                         </div>
                         <button
@@ -1124,7 +1273,7 @@ const App = () => {
                   New note
                 </p>
                 <p className="font-mono break-all text-emerald-100" data-snapshot="dynamic">
-                    {successNote.noteString ?? successNote.noteHash}
+                    {successNote.noteString ?? 'Note string unavailable'}
                 </p>
               </div>
               <button

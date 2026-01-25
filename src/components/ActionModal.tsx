@@ -143,7 +143,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
               <div className="flex justify-between text-slate-300">
                 <span>Active note</span>
                 <span className="text-slate-300" data-snapshot="dynamic">
-                  {note ? `${(note.noteString ?? note.noteHash).slice(0, 12)}...` : 'None'}
+                  {note?.noteString ? `${note.noteString.slice(0, 12)}...` : 'None'}
                 </span>
               </div>
               <div className="flex justify-between text-slate-300">
@@ -206,7 +206,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                   New note
                 </p>
                 <p className="font-mono text-cyan-300 break-all" data-snapshot="dynamic">
-                  {pendingNote.noteString ?? pendingNote.noteHash}
+                  {pendingNote.noteString ?? 'Note string unavailable'}
                 </p>
               </div>
               {onSaveNote && (
@@ -221,15 +221,25 @@ export const ActionModal: React.FC<ActionModalProps> = ({
             </div>
           )}
 
+          {mode === 'SECURE' && !note && (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs space-y-2">
+               <p className="font-bold text-amber-200">No Active Note</p>
+               <p className="text-amber-200/70">
+                 You need an active privacy note to perform shielded actions.
+                 Please import or create a note in your portfolio first.
+               </p>
+            </div>
+          )}
+
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!amount || busy || showMerkleInit}
+            disabled={!amount || busy || showMerkleInit || (mode === 'SECURE' && !note)}
             className={`w-full py-4 rounded-2xl text-lg font-bold transition-all ${
               mode === 'SECURE'
                 ? 'bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-900 shadow-lg shadow-emerald-500/20'
                 : 'bg-white text-slate-900'
-            } ${(!amount || busy || showMerkleInit) && 'opacity-50 cursor-not-allowed'}`}
+            } ${(!amount || busy || showMerkleInit || (mode === 'SECURE' && !note)) && 'opacity-50 cursor-not-allowed'}`}
           >
             {busy ? 'Working...' : mode === 'SECURE' ? 'Shield and Execute' : 'Execute'}
           </button>

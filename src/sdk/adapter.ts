@@ -1,11 +1,10 @@
+import { ZkProofResult } from './zkProof';
+
 export type LendingMode = 'FAST' | 'SECURE';
 
 export type ActionResult = {
   signature: string;
-  proof?: {
-    proof: unknown;
-    publicSignals: string[];
-  };
+  proof?: ZkProofResult;
 };
 
 export type LendingAdapter = {

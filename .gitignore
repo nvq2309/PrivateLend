@@ -35,3 +35,20 @@ test-ledger/
 
 # Local keys
 .keys/
+
+# Test artifacts
+test-results/
+tests/ui/__screenshots__/
+
+# Workflow files
+.agent-workflow/
+agent-workflow.zip
+workflow_v1/
+progress.txt
+
+# Temp files
+mnt/
+PrivateLend.code-workspace
+
+# Circuit build artifacts
+circuits/veillend/build/

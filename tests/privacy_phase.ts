@@ -13,25 +13,19 @@ import {
 } from '../src/sdk/notes';
 import {
   createPrivacyNote,
+  fromHex,
   verifyNoteOwnership,
   savePrivacyNote,
   loadPrivacyNotes,
   getNextNoteIndex,
   getTotalBalance,
   clearPrivacyNotes,
-  initializeSecrets,
 } from '../src/sdk/commitment';
-import {
-  generateOwnershipProof,
-  verifyOwnershipProof,
-  generateSpendProof,
-  verifySpendProof,
-  generateTransactionProof,
-  verifyTransactionProof,
-  isNullifierSpent,
-  markNullifierSpent,
-  clearNullifierRegistry,
-} from '../src/sdk/proof';
+import { isNullifierSpent, markNullifierSpent, clearNullifierRegistry } from '../src/sdk/proof';
+import { getMerkleProof } from '../src/sdk/merkle';
+import { buildNoteStringFromPrivacyNote, buildPrivacyNoteFromNoteString, decodeNoteString } from '../src/sdk/noteString';
+import { bytesToBigIntBE, poseidonHash } from '../src/sdk/poseidon';
+import { buildZkInputs } from '../src/sdk/zkInputs';
 import {
   generateStealthKeypair,
   deriveStealthAddress,
@@ -161,7 +155,7 @@ describe('Privacy Phase - SDK', () => {
         noteIndex: 0,
       });
 
-      const verified = await verifyNoteOwnership(note, ownerPubkey);
+      const verified = await verifyNoteOwnership(note, 'SOL');
       expect(verified).to.equal(true);
     });
 
@@ -197,29 +191,85 @@ describe('Privacy Phase - SDK', () => {
     });
   });
 
-  describe('Proof generation + nullifier registry', () => {
-    it('generates and verifies ownership/spend proofs', async () => {
+  describe('Note string serialization', () => {
+    it('round-trips note string payload', async () => {
       const ownerPubkey = new Uint8Array(32).fill(9);
-      const vaultAddress = 'VaultPrivacyTest33333333333333333333333333';
+      const vaultAddress = Keypair.generate().publicKey.toBase58();
       const note = await createPrivacyNote({
+        walletAddress,
+        ownerPubkey,
+        vaultAddress,
+        depositAmount: 1_000n,
+        borrowAmount: 250n,
+        noteIndex: 2,
+        collateralSymbol: 'SOL',
+      });
+      const noteRecord = await createNoteRecord({
+        walletAddress,
+        lastTxnId: 'tx-note-string',
+        timestamp: 1700001234000,
+      });
+      const noteString = buildNoteStringFromPrivacyNote(note, 'SOL', noteRecord.noteHash);
+      const decoded = decodeNoteString(noteString);
+      expect(decoded.noteHash).to.equal(noteRecord.noteHash);
+      expect(decoded.vaultAddress).to.equal(vaultAddress);
+      expect(decoded.noteIndex).to.equal(2n);
+
+      const restored = await buildPrivacyNoteFromNoteString({
+        noteString,
+        walletAddress,
+        ownerPubkey,
+        collateralSymbol: 'SOL',
+      });
+      expect(restored.commitment).to.equal(note.commitment);
+      expect(restored.nullifier).to.equal(note.nullifier);
+      expect(restored.noteIndex).to.equal(note.noteIndex);
+    });
+  });
+
+  describe('ZK input generation + nullifier registry', () => {
+    it('builds action inputs bound to merkle root', async () => {
+      const ownerPubkey = new Uint8Array(32).fill(5);
+      const vaultAddress = 'VaultPrivacyTest44444444444444444444444444';
+      const oldNote = await createPrivacyNote({
         walletAddress,
         ownerPubkey,
         vaultAddress,
         depositAmount: 1_000n,
         borrowAmount: 0n,
         noteIndex: 0,
+        collateralSymbol: 'SOL',
       });
-      const secrets = initializeSecrets(walletAddress);
+      const newNote = await createPrivacyNote({
+        walletAddress,
+        ownerPubkey,
+        vaultAddress,
+        depositAmount: 1_500n,
+        borrowAmount: 0n,
+        noteIndex: 1,
+        collateralSymbol: 'SOL',
+      });
 
-      const ownershipProof = await generateOwnershipProof(note, secrets);
-      expect(await verifyOwnershipProof(ownershipProof)).to.equal(true);
+      const leaves = [new Uint8Array(fromHex(oldNote.commitment))];
+      const merkleProof = await getMerkleProof(leaves, oldNote.noteIndex, 8);
+      const inputs = await buildZkInputs({
+        action: 'supply',
+        oldNote,
+        newNote,
+        merkleProof,
+        collateralSymbol: 'SOL',
+        deltaAmount: 500n,
+      });
 
-      const recipient = Keypair.generate().publicKey.toBase58();
-      const spendProof = await generateSpendProof(note, secrets, recipient);
-      expect(await verifySpendProof(spendProof)).to.equal(true);
+      const expectedRoot = bytesToBigIntBE(merkleProof.root).toString();
+      const expectedOldCommitment = bytesToBigIntBE(fromHex(oldNote.commitment)).toString();
+      const expectedNewCommitment = bytesToBigIntBE(fromHex(newNote.commitment)).toString();
+      const nullifierHash = await poseidonHash([bytesToBigIntBE(fromHex(oldNote.nullifier))]);
 
-      const txnProof = await generateTransactionProof(note, secrets, recipient);
-      expect(await verifyTransactionProof(txnProof)).to.equal(true);
+      expect(inputs.merkleRoot).to.equal(expectedRoot);
+      expect(inputs.publicNullifierHash).to.equal(nullifierHash.toString());
+      expect(inputs.publicOldCommitment).to.equal(expectedOldCommitment);
+      expect(inputs.publicNewCommitment).to.equal(expectedNewCommitment);
     });
 
     it('tracks nullifier usage', async () => {

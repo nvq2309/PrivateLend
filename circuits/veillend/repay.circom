@@ -88,4 +88,4 @@ template Repay(depth) {
   publicNewCommitment === newCommitment;
 }
 
-component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Repay(8);
+component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Repay(4);

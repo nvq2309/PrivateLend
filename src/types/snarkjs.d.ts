@@ -5,5 +5,10 @@ declare module 'snarkjs' {
       wasm: string | ArrayBuffer,
       zkey: string | ArrayBuffer,
     ) => Promise<{ proof: unknown; publicSignals: string[] }>;
+    verify: (
+      vkey: Record<string, unknown>,
+      publicSignals: string[],
+      proof: unknown,
+    ) => Promise<boolean>;
   };
 }

@@ -1,0 +1,82 @@
+name: Backend (Anchor)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'programs/**'
+      - 'tests/**'
+      - '!tests/ui/**'
+      - 'circuits/**'
+      - 'src/sdk/**'
+      - 'Cargo.*'
+      - 'Anchor.toml'
+      - 'package.json'
+      - 'yarn.lock'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'programs/**'
+      - 'tests/**'
+      - '!tests/ui/**'
+      - 'circuits/**'
+      - 'src/sdk/**'
+      - 'Cargo.*'
+      - 'Anchor.toml'
+      - 'package.json'
+      - 'yarn.lock'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-anchor:
+    name: Anchor Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Solana
+        uses: metaplex-foundation/actions/install-solana@v1
+        with:
+          version: 1.18.0
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Anchor
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+          avm install latest
+          avm use latest
+
+      - name: Install Circom
+        run: |
+          if ! command -v circom &> /dev/null; then
+            cargo install --git https://github.com/iden3/circom.git circom
+          fi
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'yarn'
+
+      - name: Install Node dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build Circuits
+        run: ./scripts/rebuild-circuits.sh
+
+      - name: Build Anchor
+        run: anchor build
+
+      - name: Run Anchor Tests
+        run: anchor test

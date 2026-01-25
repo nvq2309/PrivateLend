@@ -14,6 +14,7 @@ use crate::state::*;
     encrypted_balance: [u8; 32],
     client_pubkey: [u8; 32],
     note_hash: [u8; 32],
+    commitment: [u8; 32],
 )]
 pub struct DepositSecure<'info> {
     #[account(mut)]
@@ -98,6 +99,11 @@ pub fn deposit_secure(
         return err!(VeilLendError::ArciumClientKeyMismatch);
     }
 
+    require!(
+        ctx.accounts.merkle_tree.vault == vault.key(),
+        VeilLendError::InvalidVaultState
+    );
+
     let shares_to_mint = if vault.total_shares == 0 || vault.total_collateral == 0 {
         amount
     } else {
@@ -167,10 +173,6 @@ pub fn deposit_secure(
         note_receipt.client_pubkey = client_pubkey;
     }
 
-    require!(
-        ctx.accounts.merkle_tree.vault == vault.key(),
-        VeilLendError::InvalidVaultState
-    );
     let leaf_index = append_leaf(&mut ctx.accounts.merkle_tree, commitment)?;
 
     emit!(DepositSecureEvent {

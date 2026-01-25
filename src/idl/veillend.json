@@ -221,8 +221,9 @@
                 "path": "vault"
               },
               {
-                "kind": "arg",
-                "path": "note_hash"
+                "kind": "account",
+                "path": "note_receipt.note_hash",
+                "account": "NoteReceipt"
               }
             ]
           }
@@ -230,45 +231,6 @@
         {
           "name": "user_borrow_account",
           "writable": true
-        },
-        {
-          "name": "kamino_market"
-        },
-        {
-          "name": "kamino_obligation"
-        },
-        {
-          "name": "kamino_lending_market_authority"
-        },
-        {
-          "name": "kamino_borrow_reserve"
-        },
-        {
-          "name": "kamino_borrow_reserve_liquidity_mint"
-        },
-        {
-          "name": "kamino_reserve_source_liquidity"
-        },
-        {
-          "name": "kamino_borrow_reserve_liquidity_fee_receiver"
-        },
-        {
-          "name": "kamino_referrer_token_state"
-        },
-        {
-          "name": "kamino_instruction_sysvar_account"
-        },
-        {
-          "name": "kamino_pyth_oracle"
-        },
-        {
-          "name": "kamino_switchboard_price_oracle"
-        },
-        {
-          "name": "kamino_switchboard_twap_oracle"
-        },
-        {
-          "name": "kamino_scope_prices"
         },
         {
           "name": "merkle_tree",
@@ -342,9 +304,6 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "kamino_program"
         }
       ],
       "args": [
@@ -389,12 +348,11 @@
           }
         },
         {
-          "name": "note_hash",
+          "name": "proof",
           "type": {
-            "array": [
-              "u8",
-              32
-            ]
+            "defined": {
+              "name": "Groth16Proof"
+            }
           }
         },
         {
@@ -1291,6 +1249,14 @@
           }
         },
         {
+          "name": "proof",
+          "type": {
+            "defined": {
+              "name": "Groth16Proof"
+            }
+          }
+        },
+        {
           "name": "merkle_proof",
           "type": {
             "vec": {
@@ -2046,8 +2012,9 @@
                 "path": "vault"
               },
               {
-                "kind": "arg",
-                "path": "note_hash"
+                "kind": "account",
+                "path": "note_receipt.note_hash",
+                "account": "NoteReceipt"
               }
             ]
           }
@@ -2055,36 +2022,6 @@
         {
           "name": "user_repay_account",
           "writable": true
-        },
-        {
-          "name": "kamino_market"
-        },
-        {
-          "name": "kamino_obligation"
-        },
-        {
-          "name": "kamino_repay_reserve"
-        },
-        {
-          "name": "kamino_reserve_liquidity_mint"
-        },
-        {
-          "name": "kamino_reserve_destination_liquidity"
-        },
-        {
-          "name": "kamino_instruction_sysvar_account"
-        },
-        {
-          "name": "kamino_pyth_oracle"
-        },
-        {
-          "name": "kamino_switchboard_price_oracle"
-        },
-        {
-          "name": "kamino_switchboard_twap_oracle"
-        },
-        {
-          "name": "kamino_scope_prices"
         },
         {
           "name": "merkle_tree",
@@ -2158,9 +2095,6 @@
         {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "kamino_program"
         }
       ],
       "args": [
@@ -2205,12 +2139,11 @@
           }
         },
         {
-          "name": "note_hash",
+          "name": "proof",
           "type": {
-            "array": [
-              "u8",
-              32
-            ]
+            "defined": {
+              "name": "Groth16Proof"
+            }
           }
         },
         {
@@ -2696,8 +2629,9 @@
                 "path": "vault"
               },
               {
-                "kind": "arg",
-                "path": "note_hash"
+                "kind": "account",
+                "path": "note_receipt.note_hash",
+                "account": "NoteReceipt"
               }
             ]
           }
@@ -2945,12 +2879,11 @@
           }
         },
         {
-          "name": "note_hash",
+          "name": "proof",
           "type": {
-            "array": [
-              "u8",
-              32
-            ]
+            "defined": {
+              "name": "Groth16Proof"
+            }
           }
         },
         {
@@ -3350,18 +3283,33 @@
     },
     {
       "code": 6025,
+      "name": "PoseidonHashFailed",
+      "msg": "Poseidon hash failed"
+    },
+    {
+      "code": 6026,
       "name": "ArciumClientKeyMissing",
       "msg": "Missing Arcium client public key"
     },
     {
-      "code": 6026,
+      "code": 6027,
       "name": "ArciumClientKeyMismatch",
       "msg": "Arcium client public key mismatch"
     },
     {
-      "code": 6027,
+      "code": 6028,
       "name": "InvalidNoteHash",
       "msg": "Invalid note access hash"
+    },
+    {
+      "code": 6029,
+      "name": "ZkProofInvalid",
+      "msg": "ZK proof verification failed"
+    },
+    {
+      "code": 6030,
+      "name": "ZkInputInvalid",
+      "msg": "Invalid ZK proof inputs"
     }
   ],
   "types": [
@@ -3608,6 +3556,86 @@
       }
     },
     {
+      "name": "Groth16Proof",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "a_x",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "a_y",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "b_x_0",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "b_x_1",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "b_y_0",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "b_y_1",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "c_x",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "c_y",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
       "name": "MerkleTree",
       "type": {
         "kind": "struct",
@@ -3643,7 +3671,7 @@
                     32
                   ]
                 },
-                8
+                4
               ]
             }
           },

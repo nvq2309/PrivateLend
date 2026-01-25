@@ -1,10 +1,3 @@
-import {
-  type NoteSecretsPayload,
-  type PrivacyNoteV2,
-  getAggregatedNotes,
-  loadSecrets,
-} from './commitment';
-
 export type NoteRecord = {
   version: 1;
   walletAddress: string;
@@ -15,26 +8,12 @@ export type NoteRecord = {
   updatedAt: number;
 };
 
-export type NoteAccessRecord = {
-  version: 1;
-  noteHash: string;
-  noteString?: string;
-  lastTxnId: string;
-  privacyNotes: PrivacyNoteV2[];
-  secrets: NoteSecretsPayload | null;
-  createdAt: number;
-  updatedAt: number;
-};
-
 const NOTE_STORAGE_PREFIX = 'veillend.note';
-const NOTE_ACCESS_PREFIX = 'veillend.note_access';
 const NOTE_VERSION: NoteRecord['version'] = 1;
 const textEncoder = new TextEncoder();
 
 const storageKeyForWallet = (walletAddress: string) =>
   `${NOTE_STORAGE_PREFIX}:${walletAddress}`;
-const storageKeyForNoteHash = (noteHash: string) =>
-  `${NOTE_ACCESS_PREFIX}:${noteHash}`;
 
 const normalizeTxnId = (lastTxnId: string | number | null | undefined) => {
   if (lastTxnId === null || lastTxnId === undefined || lastTxnId === '') {
@@ -146,76 +125,6 @@ export const findNoteRecordByHash = (noteHash: string): NoteRecord | null => {
   return null;
 };
 
-export const buildNoteAccessRecord = (
-  noteRecord: NoteRecord | null,
-  walletAddress: string | null,
-): NoteAccessRecord | null => {
-  if (!noteRecord || !walletAddress) {
-    return null;
-  }
-  const secrets = loadSecrets(walletAddress);
-  return {
-    version: 1,
-    noteHash: noteRecord.noteHash,
-    noteString: noteRecord.noteString,
-    lastTxnId: noteRecord.lastTxnId,
-    privacyNotes: getAggregatedNotes(walletAddress),
-    secrets: secrets
-      ? {
-          blindingFactor: toHex(secrets.blindingFactor),
-          spendingKey: toHex(secrets.spendingKey),
-        }
-      : null,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-};
-
-export const findNoteAccessByString = (noteString: string): NoteAccessRecord | null => {
-  if (typeof localStorage === 'undefined') {
-    return null;
-  }
-  const keys = Object.keys(localStorage).filter((key) => key.startsWith(`${NOTE_ACCESS_PREFIX}:`));
-  for (const key of keys) {
-    const raw = localStorage.getItem(key);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw) as NoteAccessRecord;
-      if (parsed.version !== NOTE_VERSION) continue;
-      if (parsed.noteString === noteString) {
-        return parsed;
-      }
-    } catch (error) {
-      console.warn('Failed to parse stored note access record', error);
-    }
-  }
-  return null;
-};
-
-export const saveNoteAccessRecord = (record: NoteAccessRecord) => {
-  if (typeof localStorage === 'undefined') {
-    throw new Error('Local storage is unavailable');
-  }
-  localStorage.setItem(storageKeyForNoteHash(record.noteHash), JSON.stringify(record));
-};
-
-export const loadNoteAccessRecord = (noteHash: string): NoteAccessRecord | null => {
-  if (typeof localStorage === 'undefined') {
-    return null;
-  }
-  const raw = localStorage.getItem(storageKeyForNoteHash(noteHash));
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as NoteAccessRecord;
-    if (parsed.version !== NOTE_VERSION || parsed.noteHash !== noteHash) {
-      return null;
-    }
-    return parsed;
-  } catch (error) {
-    console.warn('Failed to parse stored note access record', error);
-    return null;
-  }
-};
 
 export const saveNoteRecord = (note: NoteRecord) => {
   if (typeof localStorage === 'undefined') {

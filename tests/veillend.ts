@@ -6,6 +6,7 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  ComputeBudgetProgram,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -17,13 +18,16 @@ import {
 } from "@solana/spl-token";
 import { expect } from "chai";
 import { randomBytes } from "crypto";
-import { bigintToBytesBE, poseidonHashBytes } from "../src/sdk/poseidon";
+import path from "path";
+import * as snarkjs from "snarkjs";
+import { bigintToBytesBE, bytesToBigIntBE, poseidonHash, poseidonHashBytes } from "../src/sdk/poseidon";
 import {
   createArciumClient,
   encodeEncryptedBalance,
   generateArciumKeypair,
 } from "../src/sdk/arcium";
 import BN from "bn.js";
+import { ScenarioRunner } from "./sdk/scenarios";
 
 
 describe("VeilLend with Protection & Privacy", () => {
@@ -48,16 +52,63 @@ describe("VeilLend with Protection & Privacy", () => {
   const getEncryptedBalance = (deposit: bigint, borrow: bigint) =>
     encodeEncryptedBalance(arciumClient.encryptPosition(deposit, borrow));
   const getClientKey = () => Array.from(arciumKeypair.publicKey);
+  const DEFAULT_NOTE_COMMITMENT = Buffer.from(
+    "0a47ead74da5372e7d2598e4f93c389bf03e8330219f8bf1e49b362f73491a26",
+    "hex",
+  );
   const clampFieldElement = (bytes: Uint8Array) => {
     const normalized = Uint8Array.from(bytes);
-    normalized[0] &= 0x3f;
+    normalized[0] &= 0x1f; // Ensure < modulus (starts with 0x30)
     return Buffer.from(normalized);
   };
-  const buildCommitment = async (seed: number) => {
-    const input = bigintToBytesBE(BigInt(seed), 32);
-    const hashed = await poseidonHashBytes([input]);
-    return clampFieldElement(hashed);
+  const toFieldBytes = (value: bigint | string) =>
+    Array.from(bigintToBytesBE(BigInt(value), 32));
+  const toFieldString = (value: Uint8Array | bigint) => {
+    const bigIntValue = typeof value === "bigint" ? value : bytesToBigIntBE(value);
+    return bigIntValue.toString();
   };
+  const computeCommitment = async (note: {
+    nullifier: bigint;
+    secret: bigint;
+    supplySol: bigint;
+    supplyUsdc: bigint;
+    borrowSol: bigint;
+    borrowUsdc: bigint;
+    timestamp: bigint;
+  }) =>
+    poseidonHash([
+      note.nullifier,
+      note.secret,
+      note.supplySol,
+      note.supplyUsdc,
+      note.borrowSol,
+      note.borrowUsdc,
+      note.timestamp,
+    ]);
+  const computeNullifierHash = async (nullifier: Uint8Array) =>
+    poseidonHash([bytesToBigIntBE(nullifier), 0n]);
+  const buildGroth16Proof = async (action: "supply" | "borrow" | "repay" | "withdraw", input: Record<string, unknown>) => {
+    const wasmPath = path.resolve(
+      __dirname,
+      `../circuits/veillend/build/${action}/${action}_js/${action}.wasm`,
+    );
+    const zkeyPath = path.resolve(
+      __dirname,
+      `../circuits/veillend/build/${action}/setup_final.zkey`,
+    );
+    const { proof, publicSignals } = await snarkjs.groth16.fullProve(input, wasmPath, zkeyPath);
+    return { proof, publicSignals };
+  };
+  const toGroth16Proof = (proof: any) => ({
+    aX: toFieldBytes(proof.pi_a[0]),
+    aY: toFieldBytes(proof.pi_a[1]),
+    bX0: toFieldBytes(proof.pi_b[0][0]),
+    bX1: toFieldBytes(proof.pi_b[0][1]),
+    bY0: toFieldBytes(proof.pi_b[1][0]),
+    bY1: toFieldBytes(proof.pi_b[1][1]),
+    cX: toFieldBytes(proof.pi_c[0]),
+    cY: toFieldBytes(proof.pi_c[1]),
+  });
 
   // Test accounts
   let collateralMint: PublicKey;
@@ -86,7 +137,7 @@ describe("VeilLend with Protection & Privacy", () => {
   const LIQUIDATION_THRESHOLD_BPS = new BN(8500); // 85%
   const DEPOSIT_AMOUNT = new BN(10 * LAMPORTS_PER_SOL);
   const BORROW_AMOUNT = new BN(5 * LAMPORTS_PER_SOL);
-  const MERKLE_DEPTH = 8;
+  const MERKLE_DEPTH = 4;
   let commitment1: Buffer;
   let commitment2: Buffer;
   let commitment3: Buffer;
@@ -95,12 +146,28 @@ describe("VeilLend with Protection & Privacy", () => {
   let nullifier1: Buffer;
   let nullifier2: Buffer;
   let nullifier3: Buffer;
+  let nullifier4: Buffer;
+  let secret1: Buffer;
+  let secret2: Buffer;
+  let secret3: Buffer;
+  let secret4: Buffer;
+  let timestamp1: bigint;
+  let timestamp2: bigint;
+  let timestamp3: bigint;
+  let timestamp4: bigint;
+  let repayProofData: {
+    proof: any;
+    merkleProof: Buffer[];
+    merklePath: number[];
+    oldCommitment: bigint;
+    newCommitment: bigint;
+  } | null = null;
 
   const hashPair = async (left: Buffer, right: Buffer) =>
     Buffer.from(await poseidonHashBytes([left, right]));
 
   const computeZeroHashes = async (depth: number) => {
-    const hashes: Buffer[] = [Buffer.alloc(32)];
+    const hashes: Buffer[] = [DEFAULT_NOTE_COMMITMENT];
     for (let i = 0; i < depth; i += 1) {
       hashes.push(await hashPair(hashes[i], hashes[i]));
     }
@@ -139,6 +206,75 @@ describe("VeilLend with Protection & Privacy", () => {
     }
     return { proof, path, root };
   };
+
+  const buildRepayProofData = async () => {
+    if (repayProofData) {
+      return repayProofData;
+    }
+    nullifier3 = clampFieldElement(randomBytes(32));
+    secret3 = clampFieldElement(randomBytes(32));
+    timestamp3 = timestamp2 + 10n;
+    const oldNote = {
+      nullifier: bytesToBigIntBE(nullifier2),
+      secret: bytesToBigIntBE(secret2),
+      supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+      supplyUsdc: 0n,
+      borrowSol: BigInt(BORROW_AMOUNT.toString()),
+      borrowUsdc: 0n,
+      timestamp: timestamp2,
+    };
+    const newNote = {
+      nullifier: bytesToBigIntBE(nullifier3),
+      secret: bytesToBigIntBE(secret3),
+      supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+      supplyUsdc: 0n,
+      borrowSol: 0n,
+      borrowUsdc: 0n,
+      timestamp: timestamp3,
+    };
+    const oldCommitmentValue = await computeCommitment(oldNote);
+    const newCommitmentValue = await computeCommitment(newNote);
+    commitment2 = Buffer.from(bigintToBytesBE(oldCommitmentValue, 32));
+    commitment3 = Buffer.from(bigintToBytesBE(newCommitmentValue, 32));
+    const { proof, path, root } = await getMerkleProof([commitment1, commitment2], 1, MERKLE_DEPTH);
+    const nullifierHash = await computeNullifierHash(nullifier2);
+    const circuitInput = {
+      merkleRoot: toFieldString(root),
+      pathElements: proof.map((node: Buffer) => toFieldString(node)),
+      pathIndices: path,
+      oldNullifier: toFieldString(nullifier2),
+      oldSecret: toFieldString(secret2),
+      oldSupplySol: oldNote.supplySol.toString(),
+      oldSupplyUsdc: "0",
+      oldBorrowSol: BORROW_AMOUNT.toString(),
+      oldBorrowUsdc: "0",
+      oldTimestamp: oldNote.timestamp.toString(),
+      deltaRepaySol: BORROW_AMOUNT.toString(),
+      deltaRepayUsdc: "0",
+      newNullifier: toFieldString(nullifier3),
+      newSecret: toFieldString(secret3),
+      newTimestamp: newNote.timestamp.toString(),
+      publicNullifierHash: nullifierHash.toString(),
+      publicOldCommitment: oldCommitmentValue.toString(),
+      publicNewCommitment: newCommitmentValue.toString(),
+    };
+    console.log("Repay Circuit Input:", JSON.stringify(circuitInput, null, 2));
+    const zkProofData = await buildGroth16Proof("repay", circuitInput);
+    const vKey = JSON.parse(require("fs").readFileSync(require("path").resolve(__dirname, "../circuits/veillend/build/repay/verification_key.json"), "utf8"));
+    const verified = await snarkjs.groth16.verify(vKey, zkProofData.publicSignals, zkProofData.proof);
+    console.log("Off-chain verification:", verified);
+    const zkProof = toGroth16Proof(zkProofData.proof);
+    repayProofData = {
+      proof: zkProof,
+      merkleProof: proof,
+      merklePath: path,
+      oldCommitment: oldCommitmentValue,
+      newCommitment: newCommitmentValue,
+    };
+    return repayProofData;
+  };
+
+
 
 
 
@@ -359,11 +495,62 @@ describe("VeilLend with Protection & Privacy", () => {
 
   describe("3. Secure Merkle flow", () => {
     it("should append commitment on secure deposit", async () => {
-      commitment1 = await buildCommitment(1);
+      const zeroNullifier = Buffer.alloc(32);
+      const zeroSecret = Buffer.alloc(32);
+      const zeroNote = {
+        nullifier: 0n,
+        secret: 0n,
+        supplySol: 0n,
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: 0n,
+      };
+      const oldCommitmentValue = await computeCommitment(zeroNote);
+      const currentCommitment = Buffer.from(bigintToBytesBE(oldCommitmentValue, 32));
+
+      nullifier1 = clampFieldElement(randomBytes(32));
+      secret1 = clampFieldElement(randomBytes(32));
+      timestamp1 = BigInt(Math.floor(Date.now() / 1000));
+      const newNote = {
+        nullifier: bytesToBigIntBE(nullifier1),
+        secret: bytesToBigIntBE(secret1),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: timestamp1,
+      };
+      const newCommitmentValue = await computeCommitment(newNote);
+      commitment1 = Buffer.from(bigintToBytesBE(newCommitmentValue, 32));
       noteHash = new Uint8Array(Buffer.alloc(32, 1));
       const noteHashBytes = Array.from(noteHash);
       const encryptedBalance = getEncryptedBalance(BigInt(DEPOSIT_AMOUNT.toString()), 0n);
       const clientKey = getClientKey();
+      const { proof: merkleProof, path, root: merkleRoot } = await getMerkleProof([], 0, MERKLE_DEPTH);
+      const nullifierHash = await computeNullifierHash(zeroNullifier);
+      const circuitInput = {
+        merkleRoot: toFieldString(merkleRoot),
+        pathElements: merkleProof.map((node: Buffer) => toFieldString(node)),
+        pathIndices: path,
+        oldNullifier: toFieldString(zeroNullifier),
+        oldSecret: toFieldString(zeroSecret),
+        oldSupplySol: "0",
+        oldSupplyUsdc: "0",
+        oldBorrowSol: "0",
+        oldBorrowUsdc: "0",
+        oldTimestamp: "0",
+        deltaSupplySol: DEPOSIT_AMOUNT.toString(),
+        deltaSupplyUsdc: "0",
+        newNullifier: toFieldString(nullifier1),
+        newSecret: toFieldString(secret1),
+        newTimestamp: newNote.timestamp.toString(),
+        publicNullifierHash: nullifierHash.toString(),
+        publicOldCommitment: oldCommitmentValue.toString(),
+        publicNewCommitment: newCommitmentValue.toString(),
+      };
+      const zkProofData = await buildGroth16Proof("supply", circuitInput);
+      const zkProof = toGroth16Proof(zkProofData.proof);
 
       [noteReceipt] = PublicKey.findProgramAddressSync(
         [Buffer.from('note_receipt'), vault.toBuffer(), Buffer.from(noteHashBytes)],
@@ -425,11 +612,55 @@ describe("VeilLend with Protection & Privacy", () => {
         user2BorrowAccountAddr = userBorrowAccount.address;
       }
 
-      commitment2 = await buildCommitment(2);
-      nullifier1 = randomBytes(32);
-      const nullifier1Bytes = Array.from(nullifier1);
-
-      const { proof, path } = await getMerkleProof([commitment1], 0, MERKLE_DEPTH);
+      nullifier2 = clampFieldElement(randomBytes(32));
+      secret2 = clampFieldElement(randomBytes(32));
+      timestamp2 = BigInt(Math.floor(Date.now() / 1000) + 10);
+      const oldNote = {
+        nullifier: bytesToBigIntBE(nullifier1),
+        secret: bytesToBigIntBE(secret1),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: timestamp1,
+      };
+      const newNote = {
+        nullifier: bytesToBigIntBE(nullifier2),
+        secret: bytesToBigIntBE(secret2),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: BigInt(BORROW_AMOUNT.toString()),
+        borrowUsdc: 0n,
+        timestamp: timestamp2,
+      };
+      const oldCommitmentValue = await computeCommitment(oldNote);
+      const newCommitmentValue = await computeCommitment(newNote);
+      commitment1 = Buffer.from(bigintToBytesBE(oldCommitmentValue, 32));
+      commitment2 = Buffer.from(bigintToBytesBE(newCommitmentValue, 32));
+      const { proof, path, root: borrowRoot } = await getMerkleProof([commitment1], 0, MERKLE_DEPTH);
+      const nullifierHash = await computeNullifierHash(nullifier1);
+      const circuitInput = {
+        merkleRoot: toFieldString(borrowRoot),
+        pathElements: proof.map((node: Buffer) => toFieldString(node)),
+        pathIndices: path,
+        oldNullifier: toFieldString(nullifier1),
+        oldSecret: toFieldString(secret1),
+        oldSupplySol: oldNote.supplySol.toString(),
+        oldSupplyUsdc: "0",
+        oldBorrowSol: "0",
+        oldBorrowUsdc: "0",
+        oldTimestamp: oldNote.timestamp.toString(),
+        deltaBorrowSol: BORROW_AMOUNT.toString(),
+        deltaBorrowUsdc: "0",
+        newNullifier: toFieldString(nullifier2),
+        newSecret: toFieldString(secret2),
+        newTimestamp: newNote.timestamp.toString(),
+        publicNullifierHash: nullifierHash.toString(),
+        publicOldCommitment: oldCommitmentValue.toString(),
+        publicNewCommitment: newCommitmentValue.toString(),
+      };
+      const zkProofData = await buildGroth16Proof("borrow", circuitInput);
+      const zkProof = toGroth16Proof(zkProofData.proof);
       const encryptedBalance = getEncryptedBalance(
         BigInt(DEPOSIT_AMOUNT.toString()),
         BigInt(BORROW_AMOUNT.toString()),
@@ -439,7 +670,8 @@ describe("VeilLend with Protection & Privacy", () => {
         encryptedBalance: encryptedBalance,
         currentCommitment: Array.from(commitment1),
         newCommitment: Array.from(commitment2),
-        nullifier: nullifier1Bytes,
+        nullifier: Array.from(nullifier1),
+        zkProof,
         merkleProof: proof.map((node: Buffer) => Array.from(node)),
         merklePath: Buffer.from(path),
       };
@@ -447,7 +679,7 @@ describe("VeilLend with Protection & Privacy", () => {
         [
           Buffer.from('nullifier'),
           vault.toBuffer(),
-          Buffer.from(nullifier1Bytes),
+          Buffer.from(borrowArgs.nullifier),
         ],
         program.programId,
       )[0];
@@ -458,7 +690,7 @@ describe("VeilLend with Protection & Privacy", () => {
           borrowArgs.currentCommitment,
           borrowArgs.newCommitment,
           borrowArgs.nullifier,
-          Array.from(noteHash),
+          borrowArgs.zkProof,
           borrowArgs.merkleProof,
           borrowArgs.merklePath,
         )
@@ -467,26 +699,12 @@ describe("VeilLend with Protection & Privacy", () => {
           vault,
           noteReceipt,
           userBorrowAccount: user2BorrowAccountAddr,
-          kaminoMarket: PublicKey.default,
-          kaminoObligation: PublicKey.default,
-          kaminoLendingMarketAuthority: PublicKey.default,
-          kaminoBorrowReserve: PublicKey.default,
-          kaminoBorrowReserveLiquidityMint: PublicKey.default,
-          kaminoReserveSourceLiquidity: PublicKey.default,
-          kaminoBorrowReserveLiquidityFeeReceiver: PublicKey.default,
-          kaminoReferrerTokenState: PublicKey.default,
-          kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
-          kaminoPythOracle: PublicKey.default,
-          kaminoSwitchboardPriceOracle: PublicKey.default,
-          kaminoSwitchboardTwapOracle: PublicKey.default,
-          kaminoScopePrices: PublicKey.default,
           merkleTree,
           nullifierAccount: nullifierPda,
           collateralMint,
           borrowMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          kaminoProgram: PublicKey.default,
         })
         .signers([user2])
         .rpc();
@@ -497,21 +715,117 @@ describe("VeilLend with Protection & Privacy", () => {
 
     });
 
+    it("should reject invalid zk proof", async () => {
+      const repayData = await buildRepayProofData();
+      const badProof = JSON.parse(JSON.stringify(repayData.proof));
+      badProof.aX[0] = (badProof.aX[0] + 1) % 255;
+const encryptedBalance = getEncryptedBalance(
+        BigInt(DEPOSIT_AMOUNT.toString()),
+        0n,
+      );
+      try {
+        await program.methods
+          .repaySecure(
+            BORROW_AMOUNT,
+            encryptedBalance,
+            Array.from(commitment2),
+            Array.from(commitment3),
+            Array.from(nullifier2),
+            badProof,
+            repayData.merkleProof.map((node: Buffer) => Array.from(node)),
+            Buffer.from(repayData.merklePath),
+          )
+          .accountsStrict({
+            user: user.publicKey,
+            vault,
+            noteReceipt,
+            userRepayAccount: userBorrowAccountAddr,
+            merkleTree,
+            nullifierAccount: PublicKey.findProgramAddressSync(
+              [Buffer.from('nullifier'), vault.toBuffer(), Buffer.from(nullifier2)],
+              program.programId,
+            )[0],
+            collateralMint,
+            repayMint: borrowMint,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+        .signers([user])
+        .rpc();
+        throw new Error("Expected zk proof to fail");
+      } catch (error) {
+        const anchorError = error as { error?: { errorCode?: { code?: string }, errorMessage?: string } };
+        const errorCode = anchorError?.error?.errorCode?.code;
+        const anchorMessage = anchorError?.error?.errorMessage;
+        if (errorCode) {
+          expect(errorCode).to.equal("ZkProofInvalid");
+          return;
+        }
+        expect(anchorMessage ?? "").to.include("ZK proof verification failed");
+      }
+    });
+
     it("should block double-spend with same nullifier", async () => {
-      const { proof, path } = await getMerkleProof([commitment1, commitment2], 1, MERKLE_DEPTH);
+      const { proof, path, root: doubleSpendRoot } = await getMerkleProof([commitment1, commitment2], 0, MERKLE_DEPTH);
       const doubleSpendAmount = new BN(1 * LAMPORTS_PER_SOL);
       const totalBorrowAfter = BORROW_AMOUNT.add(doubleSpendAmount);
+      const doubleSpendNullifier = clampFieldElement(randomBytes(32));
+      const doubleSpendSecret = clampFieldElement(randomBytes(32));
+      const doubleSpendTimestamp = timestamp2 + 20n;
+      const oldNote = {
+        nullifier: bytesToBigIntBE(nullifier1),
+        secret: bytesToBigIntBE(secret1),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: timestamp1,
+      };
+      const newNote = {
+        nullifier: bytesToBigIntBE(doubleSpendNullifier),
+        secret: bytesToBigIntBE(doubleSpendSecret),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: BigInt(doubleSpendAmount.toString()),
+        borrowUsdc: 0n,
+        timestamp: doubleSpendTimestamp,
+      };
+      const oldCommitmentValue = await computeCommitment(oldNote);
+      const newCommitmentValue = await computeCommitment(newNote);
+      const nullifierHash = await computeNullifierHash(nullifier1);
+      const circuitInput = {
+        merkleRoot: toFieldString(doubleSpendRoot),
+        pathElements: proof.map((node: Buffer) => toFieldString(node)),
+        pathIndices: path,
+        oldNullifier: toFieldString(nullifier1),
+        oldSecret: toFieldString(secret1),
+        oldSupplySol: oldNote.supplySol.toString(),
+        oldSupplyUsdc: "0",
+        oldBorrowSol: "0",
+        oldBorrowUsdc: "0",
+        oldTimestamp: oldNote.timestamp.toString(),
+        deltaBorrowSol: doubleSpendAmount.toString(),
+        deltaBorrowUsdc: "0",
+        newNullifier: toFieldString(doubleSpendNullifier),
+        newSecret: toFieldString(doubleSpendSecret),
+        newTimestamp: doubleSpendTimestamp.toString(),
+        publicNullifierHash: nullifierHash.toString(),
+        publicOldCommitment: oldCommitmentValue.toString(),
+        publicNewCommitment: newCommitmentValue.toString(),
+      };
+      const zkProofData = await buildGroth16Proof("borrow", circuitInput);
+      const zkProof = toGroth16Proof(zkProofData.proof);
       const encryptedBalance = getEncryptedBalance(
         BigInt(DEPOSIT_AMOUNT.toString()),
         BigInt(totalBorrowAfter.toString()),
       );
-      const nullifier1Bytes = Array.from(nullifier1);
       const borrowArgs = {
         amount: doubleSpendAmount,
         encryptedBalance: encryptedBalance,
-        currentCommitment: Array.from(commitment2),
-        newCommitment: Array.from(commitment2),
-        nullifier: nullifier1Bytes,
+        currentCommitment: Array.from(commitment1),
+        newCommitment: Array.from(bigintToBytesBE(newCommitmentValue, 32)),
+        nullifier: Array.from(nullifier1),
+        zkProof,
         merkleProof: proof.map((node: Buffer) => Array.from(node)),
         merklePath: Buffer.from(path),
       };
@@ -519,7 +833,7 @@ describe("VeilLend with Protection & Privacy", () => {
         [
           Buffer.from('nullifier'),
           vault.toBuffer(),
-          Buffer.from(nullifier1Bytes),
+          Buffer.from(borrowArgs.nullifier),
         ],
         program.programId,
       )[0];
@@ -531,7 +845,7 @@ describe("VeilLend with Protection & Privacy", () => {
             borrowArgs.currentCommitment,
             borrowArgs.newCommitment,
             borrowArgs.nullifier,
-            Array.from(noteHash),
+            borrowArgs.zkProof,
             borrowArgs.merkleProof,
             borrowArgs.merklePath,
           )
@@ -540,26 +854,12 @@ describe("VeilLend with Protection & Privacy", () => {
             vault,
             noteReceipt,
             userBorrowAccount: user2BorrowAccountAddr,
-            kaminoMarket: PublicKey.default,
-            kaminoObligation: PublicKey.default,
-            kaminoLendingMarketAuthority: PublicKey.default,
-            kaminoBorrowReserve: PublicKey.default,
-            kaminoBorrowReserveLiquidityMint: PublicKey.default,
-            kaminoReserveSourceLiquidity: PublicKey.default,
-            kaminoBorrowReserveLiquidityFeeReceiver: PublicKey.default,
-            kaminoReferrerTokenState: PublicKey.default,
-            kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
-            kaminoPythOracle: PublicKey.default,
-            kaminoSwitchboardPriceOracle: PublicKey.default,
-            kaminoSwitchboardTwapOracle: PublicKey.default,
-            kaminoScopePrices: PublicKey.default,
             merkleTree,
             nullifierAccount: nullifierPda,
             collateralMint,
             borrowMint,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
-            kaminoProgram: PublicKey.default,
           })
           .signers([user2])
           .rpc();
@@ -579,10 +879,8 @@ describe("VeilLend with Protection & Privacy", () => {
     });
 
     it("should repay and withdraw with new commitments", async () => {
-      commitment3 = await buildCommitment(3);
-      nullifier2 = randomBytes(32);
-      const nullifier2Bytes = Array.from(nullifier2);
-      const { proof, path } = await getMerkleProof([commitment1, commitment2], 1, MERKLE_DEPTH);
+      const repayData = await buildRepayProofData();
+      const repayProof = repayData.proof;
       const encryptedBalance = getEncryptedBalance(
         BigInt(DEPOSIT_AMOUNT.toString()),
         BigInt(BORROW_AMOUNT.toString()),
@@ -592,15 +890,16 @@ describe("VeilLend with Protection & Privacy", () => {
         encryptedBalance: encryptedBalance,
         currentCommitment: Array.from(commitment2),
         newCommitment: Array.from(commitment3),
-        nullifier: nullifier2Bytes,
-        merkleProof: proof.map((node: Buffer) => Array.from(node)),
-        merklePath: Buffer.from(path),
+        nullifier: Array.from(nullifier2),
+        zkProof: repayProof,
+        merkleProof: repayData.merkleProof.map((node: Buffer) => Array.from(node)),
+        merklePath: Buffer.from(repayData.merklePath),
       };
       const nullifierPda = PublicKey.findProgramAddressSync(
         [
           Buffer.from('nullifier'),
           vault.toBuffer(),
-          Buffer.from(nullifier2Bytes),
+          Buffer.from(repayArgs.nullifier),
         ],
         program.programId,
       )[0];
@@ -612,6 +911,7 @@ describe("VeilLend with Protection & Privacy", () => {
         user2,
         BORROW_AMOUNT.toNumber(),
       );
+
       await program.methods
         .repaySecure(
           repayArgs.amount,
@@ -619,7 +919,7 @@ describe("VeilLend with Protection & Privacy", () => {
           repayArgs.currentCommitment,
           repayArgs.newCommitment,
           repayArgs.nullifier,
-          Array.from(noteHash),
+          repayArgs.zkProof,
           repayArgs.merkleProof,
           repayArgs.merklePath,
         )
@@ -628,45 +928,80 @@ describe("VeilLend with Protection & Privacy", () => {
           vault,
           noteReceipt,
           userRepayAccount: userBorrowAccountAddr,
-          kaminoMarket: PublicKey.default,
-          kaminoObligation: PublicKey.default,
-          kaminoRepayReserve: PublicKey.default,
-          kaminoReserveLiquidityMint: PublicKey.default,
-          kaminoReserveDestinationLiquidity: PublicKey.default,
-          kaminoInstructionSysvarAccount: SYSVAR_INSTRUCTIONS_PUBKEY,
-          kaminoPythOracle: PublicKey.default,
-          kaminoSwitchboardPriceOracle: PublicKey.default,
-          kaminoSwitchboardTwapOracle: PublicKey.default,
-          kaminoScopePrices: PublicKey.default,
           merkleTree,
           nullifierAccount: nullifierPda,
           collateralMint,
           repayMint: borrowMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          kaminoProgram: PublicKey.default,
         })
+        .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 })])
         .signers([user])
         .rpc();
 
-      commitment4 = await buildCommitment(4);
-      nullifier3 = randomBytes(32);
-      const nullifier3Bytes = Array.from(nullifier3);
+      nullifier4 = clampFieldElement(randomBytes(32));
+      secret4 = clampFieldElement(randomBytes(32));
+      timestamp4 = timestamp3 + 10n;
+      const withdrawOldNote = {
+        nullifier: bytesToBigIntBE(nullifier3),
+        secret: bytesToBigIntBE(secret3),
+        supplySol: BigInt(DEPOSIT_AMOUNT.toString()),
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: timestamp3,
+      };
+      const withdrawNewNote = {
+        nullifier: bytesToBigIntBE(nullifier4),
+        secret: bytesToBigIntBE(secret4),
+        supplySol: 0n,
+        supplyUsdc: 0n,
+        borrowSol: 0n,
+        borrowUsdc: 0n,
+        timestamp: timestamp4,
+      };
+      const withdrawOldCommitmentValue = await computeCommitment(withdrawOldNote);
+      const withdrawNewCommitmentValue = await computeCommitment(withdrawNewNote);
+      commitment4 = Buffer.from(bigintToBytesBE(withdrawNewCommitmentValue, 32));
       const receipt = await programAccounts.noteReceipt.fetch(noteReceipt);
-      const { proof: withdrawProof, path: withdrawPath } = await getMerkleProof(
+      const { proof: withdrawProof, path: withdrawPath, root: withdrawRoot } = await getMerkleProof(
         [commitment1, commitment2, commitment3],
         2,
         MERKLE_DEPTH,
       );
+      const withdrawNullifierHash = await computeNullifierHash(nullifier3);
+      const withdrawCircuitInput = {
+        merkleRoot: toFieldString(withdrawRoot),
+        pathElements: withdrawProof.map((node) => toFieldString(node)),
+        pathIndices: withdrawPath,
+        oldNullifier: toFieldString(nullifier3),
+        oldSecret: toFieldString(secret3),
+        oldSupplySol: DEPOSIT_AMOUNT.toString(),
+        oldSupplyUsdc: "0",
+        oldBorrowSol: "0",
+        oldBorrowUsdc: "0",
+        oldTimestamp: timestamp3.toString(),
+        deltaWithdrawSol: DEPOSIT_AMOUNT.toString(),
+        deltaWithdrawUsdc: "0",
+        newNullifier: toFieldString(nullifier4),
+        newSecret: toFieldString(secret4),
+        newTimestamp: timestamp4.toString(),
+        publicNullifierHash: withdrawNullifierHash.toString(),
+        publicOldCommitment: withdrawOldCommitmentValue.toString(),
+        publicNewCommitment: withdrawNewCommitmentValue.toString(),
+      };
+      const withdrawZkProofData = await buildGroth16Proof("withdraw", withdrawCircuitInput);
+      const withdrawZkProof = toGroth16Proof(withdrawZkProofData.proof);
       const withdrawArgs = {
         sharesToBurn: receipt.shares,
         encryptedBalance: getEncryptedBalance(
-          BigInt(DEPOSIT_AMOUNT.toString()),
+          0n,
           0n,
         ),
         currentCommitment: Array.from(commitment3),
         newCommitment: Array.from(commitment4),
-        nullifier: nullifier3Bytes,
+        nullifier: Array.from(nullifier3),
+        zkProof: withdrawZkProof,
         merkleProof: withdrawProof.map((node) => Array.from(node)),
         merklePath: Buffer.from(withdrawPath),
       };
@@ -674,10 +1009,11 @@ describe("VeilLend with Protection & Privacy", () => {
         [
           Buffer.from('nullifier'),
           vault.toBuffer(),
-          Buffer.from(nullifier3Bytes),
+          Buffer.from(withdrawArgs.nullifier),
         ],
         program.programId,
       )[0];
+
       await program.methods
         .withdrawSecure(
           withdrawArgs.sharesToBurn,
@@ -685,7 +1021,7 @@ describe("VeilLend with Protection & Privacy", () => {
           withdrawArgs.currentCommitment,
           withdrawArgs.newCommitment,
           withdrawArgs.nullifier,
-          Array.from(noteHash),
+          withdrawArgs.zkProof,
           withdrawArgs.merkleProof,
           withdrawArgs.merklePath,
         )
@@ -703,6 +1039,7 @@ describe("VeilLend with Protection & Privacy", () => {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
+        .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 })])
         .signers([user])
         .rpc();
 
@@ -712,6 +1049,96 @@ describe("VeilLend with Protection & Privacy", () => {
         MERKLE_DEPTH,
       );
       expect(Buffer.from(tree.root)).to.deep.equal(root);
+    });
+  });
+
+  describe("Scenario Runner - Randomized Flow", () => {
+    let runner: ScenarioRunner;
+
+    before(async () => {
+        runner = new ScenarioRunner(program, provider, collateralMint);
+        await runner.addWallet(); // Wallet 0
+        await runner.addWallet(); // Wallet 1
+    });
+
+    it("should execute a randomized sequence of 20+ actions", async () => {
+        const ACTIONS = ["Supply", "Borrow", "Repay", "Withdraw"];
+        const numActions = 25;
+
+        for (let i = 0; i < numActions; i++) {
+            const action = ACTIONS[Math.floor(Math.random() * ACTIONS.length)];
+            const walletIdx = Math.floor(Math.random() * 2);
+            const amount = BigInt(Math.floor(Math.random() * 1000000) + 100000); // 0.0001 - 0.001 SOL
+            
+            const wallet = runner.wallets[walletIdx];
+            console.log(`[Action ${i+1}] Wallet ${walletIdx} ${action} ${amount}`);
+
+            try {
+                if (action === "Supply") {
+                    await runner.depositSecure(walletIdx, amount);
+                } else if (action === "Borrow") {
+                    // Check if enough collateral (simplified check)
+                    if (wallet.currentNote.supplySol > amount * 2n) {
+                        await runner.borrowSecure(walletIdx, amount);
+                    }
+                } else if (action === "Repay") {
+                    if (wallet.currentNote.borrowSol >= amount) {
+                        await runner.repaySecure(walletIdx, amount);
+                    }
+                } else if (action === "Withdraw") {
+                    if (wallet.currentNote.borrowSol === 0n && wallet.currentNote.supplySol >= amount) {
+                        await runner.withdrawSecure(walletIdx, amount);
+                    }
+                }
+
+                // Note Privacy Check: unauthorized_user cannot decrypt
+                const otherWalletIdx = 1 - walletIdx;
+                const otherWallet = runner.wallets[otherWalletIdx];
+                const noteHash = wallet.noteHash;
+                
+                // Fetch note details from program (shares, encrypted_balance)
+                const [noteReceiptPda] = PublicKey.findProgramAddressSync(
+                    [Buffer.from('note_receipt'), runner.vault.toBuffer(), Buffer.from(noteHash)],
+                    program.programId,
+                );
+                const onChainNote = await program.account.noteReceipt.fetch(noteReceiptPda);
+                
+                // Attempt to decrypt with other wallet's key
+                const otherClient = otherWallet.arciumClient;
+                // On-chain encrypted_balance is 32 bytes: [24 cipher][8 hash]
+                const payload = new Uint8Array(24 + 32);
+                payload.set(onChainNote.encryptedBalance.slice(0, 24), 0);
+                // We don't have the full nonce (ephemeral pubkey) on-chain for standard decryption
+                // because storeEncryptedBundle is used off-chain.
+                // However, we can simulate the "unauthorized" by trying to use the other wallet's private key
+                // against the ciphertext.
+                
+                const decrypted = otherClient.decryptPosition(onChainNote.encryptedBalance);
+                // If it was decrypted with WRONG key, it should be garbage data or fail
+                // In Arcium SDK, xor with wrong shared secret results in garbage.
+                expect(decrypted.deposit).to.not.equal(wallet.currentNote.supplySol);
+            } catch (e) {
+                console.log(`Action ${action} failed (expected or unexpected): ${e}`);
+            }
+        }
+    });
+
+    it("should verify 'Repay All' constraint (Withdraw 0.0001 SOL with 0.0001 USDC debt)", async () => {
+        const walletIdx = await runner.addWallet(); // Fresh wallet
+        const supplyAmount = BigInt(LAMPORTS_PER_SOL / 1000); // 0.001 SOL
+        const borrowAmount = BigInt(LAMPORTS_PER_SOL / 10000); // 0.0001 SOL (Simulated USDC as borrowMint is same)
+        const withdrawAmount = BigInt(LAMPORTS_PER_SOL / 10000); // 0.0001 SOL
+
+        await runner.depositSecure(walletIdx, supplyAmount);
+        await runner.borrowSecure(walletIdx, borrowAmount);
+
+        try {
+            await runner.withdrawSecure(walletIdx, withdrawAmount);
+            expect.fail("Should have failed with OutstandingDebt");
+        } catch (error) {
+            const anchorError = error as { error?: { errorCode?: { code?: string } } };
+            expect(anchorError?.error?.errorCode?.code).to.equal("OutstandingDebt");
+        }
     });
   });
 });

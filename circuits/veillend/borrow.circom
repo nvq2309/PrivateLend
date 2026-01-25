@@ -89,4 +89,4 @@ template Borrow(depth) {
   publicNewCommitment === newCommitment;
 }
 
-component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Borrow(8);
+component main {public [merkleRoot, publicNullifierHash, publicOldCommitment, publicNewCommitment]} = Borrow(4);

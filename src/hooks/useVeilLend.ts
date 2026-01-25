@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   PublicKey,
@@ -30,7 +30,7 @@ import {
   USDC_MINT,
   WSOL_MINT,
 } from '../config/solana';
-import { isE2e } from '../config/e2e';
+import { isE2e, shouldMockAdapters } from '../config/e2e';
 import {
   NoteRecord,
   clearNoteRecord,
@@ -39,7 +39,7 @@ import {
   rotateNoteRecord,
   saveNoteRecord,
 } from '../sdk/notes';
-import { type ActionResult, createFastAdapter } from '../sdk/adapter';
+import { createFastAdapter } from '../sdk/adapter';
 import {
   type ArciumKeypair,
   createArciumClient,
@@ -55,20 +55,13 @@ import {
   getTotalBalance,
   getUnspentNotes,
   loadPrivacyNotes,
-  loadSecrets,
   markNoteSpent,
   savePrivacyNote,
 } from '../sdk/commitment';
 import { fromHex, toHex } from '../sdk/commitment';
 import { getMerkleProof } from '../sdk/merkle';
-import { buildZkInputs } from '../sdk/zkInputs';
-import { generateZkProof } from '../sdk/zkProof';
-import {
-  type SpendProof,
-  generateSpendProof,
-  isNullifierSpent,
-  markNullifierSpent,
-} from '../sdk/proof';
+import { generateZkActionProof } from '../sdk/proof';
+import { type ZkProofResult } from '../sdk/zkProof';
 
 export interface Position {
   deposit: number;
@@ -132,6 +125,17 @@ const depositSecureLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'commitment'),
 ]);
 
+const groth16ProofLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'aX'),
+  borsh.array(borsh.u8(), 32, 'aY'),
+  borsh.array(borsh.u8(), 32, 'bX0'),
+  borsh.array(borsh.u8(), 32, 'bX1'),
+  borsh.array(borsh.u8(), 32, 'bY0'),
+  borsh.array(borsh.u8(), 32, 'bY1'),
+  borsh.array(borsh.u8(), 32, 'cX'),
+  borsh.array(borsh.u8(), 32, 'cY'),
+], 'proof');
+
 const secureSpendLayout = borsh.struct([
   borsh.u64('amount'),
   borsh.array(borsh.u8(), 32, 'encrypted_balance'),
@@ -139,6 +143,7 @@ const secureSpendLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
   borsh.array(borsh.u8(), 32, 'note_hash'),
+  groth16ProofLayout,
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
 ]);
@@ -150,6 +155,7 @@ const withdrawSecureLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
   borsh.array(borsh.u8(), 32, 'note_hash'),
+  groth16ProofLayout,
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
 ]);
@@ -269,8 +275,17 @@ const toNumber = (value: BN | number | bigint | null | undefined) => {
 const randomBytes32 = () => Array.from(crypto.getRandomValues(new Uint8Array(32)));
 const buildE2eSignature = () =>
   `e2e_${Date.now().toString(16)}_${Math.random().toString(16).slice(2, 10)}`;
-const buildE2eProof = (signature: string) => ({
-  proof: { protocol: 'e2e' },
+const buildE2eProof = (signature: string): ZkProofResult => ({
+  proof: {
+    aX: Array(32).fill(0),
+    aY: Array(32).fill(0),
+    bX0: Array(32).fill(0),
+    bX1: Array(32).fill(0),
+    bY0: Array(32).fill(0),
+    bY1: Array(32).fill(0),
+    cX: Array(32).fill(0),
+    cY: Array(32).fill(0),
+  },
   publicSignals: [signature, 'e2e'],
 });
 
@@ -301,11 +316,13 @@ const deriveVaultCollateralPda = (programId: PublicKey, vault: PublicKey) =>
 const deriveMerkleTreePda = (programId: PublicKey, vault: PublicKey) =>
   PublicKey.findProgramAddressSync([Buffer.from(MERKLE_TREE_SEED), vault.toBuffer()], programId)[0];
 
-const decodeAccount = (layout: any, data: Buffer) => {
-  if (data.length < 8 + layout.span) {
-    throw new Error('Account data too short');
+const safeDecodeAccount = (layout: any, data: Buffer) => {
+  try {
+    if (!data || data.length < 8 + layout.span) return null;
+    return layout.decode(data.subarray(8));
+  } catch {
+    return null;
   }
-  return layout.decode(data.subarray(8));
 };
 
 export const useVeilLend = (mint?: PublicKey) => {
@@ -383,7 +400,6 @@ export const useVeilLend = (mint?: PublicKey) => {
   const isMerkleTreeInitialized = E2E_TEST_MODE || merkleNextIndex !== null;
   const [note, setNote] = useState<NoteRecord | null>(null);
   const [privacyNotes, setPrivacyNotes] = useState<PrivacyNoteV2[]>([]);
-  const [lastSpendProof, setLastSpendProof] = useState<SpendProof | null>(null);
   const [arciumKeypair, setArciumKeypair] = useState<ArciumKeypair | null>(null);
   const [arciumClient, setArciumClient] = useState<ArciumEncryptionClient | null>(null);
 
@@ -442,7 +458,7 @@ export const useVeilLend = (mint?: PublicKey) => {
             : null;
         const defaultDecimals = collateralMint.equals(WSOL_MINT) ? 9 : 6;
         setWalletBalanceLamports(
-          e2eBalances?.walletBalanceLamports ?? 5 * Math.pow(10, 9),
+          e2eBalances?.walletBalanceLamports ?? 100 * Math.pow(10, 9),
         );
         setCollateralBalanceLamports(
           e2eBalances?.collateralBalanceLamports ?? 5 * Math.pow(10, defaultDecimals),
@@ -521,41 +537,51 @@ export const useVeilLend = (mint?: PublicKey) => {
         setVaultAuthority(null);
         setMyPosition(null);
       } else {
-        const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
-        const liquidationThresholdBps = toNumber(vaultAccount.liquidation_threshold_bps);
-        const ltvBps = Math.min(toNumber(vaultAccount.ltv_bps), BORROW_LIMIT_BPS);
-        setVaultAuthority(vaultAccount.authority as PublicKey);
-        setBorrowMintAddress(vaultAccount.borrow_mint as PublicKey);
-        setVaultStats({
-          totalCollateral: toNumber(vaultAccount.total_collateral),
-          totalBorrowed: toNumber(vaultAccount.total_borrowed),
-          totalShares: toNumber(vaultAccount.total_shares),
-          ltv: ltvBps / 100,
-          liquidationThreshold: liquidationThresholdBps / 100,
-        });
+        const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+        if (!vaultAccount) {
+          setVaultStats(null);
+          setVaultAuthority(null);
+          setMyPosition(null);
+        } else {
+          const liquidationThresholdBps = toNumber(vaultAccount.liquidation_threshold_bps);
+          const ltvBps = Math.min(toNumber(vaultAccount.ltv_bps), BORROW_LIMIT_BPS);
+          setVaultAuthority(vaultAccount.authority as PublicKey);
+          setBorrowMintAddress(vaultAccount.borrow_mint as PublicKey);
+          setVaultStats({
+            totalCollateral: toNumber(vaultAccount.total_collateral),
+            totalBorrowed: toNumber(vaultAccount.total_borrowed),
+            totalShares: toNumber(vaultAccount.total_shares),
+            ltv: ltvBps / 100,
+            liquidationThreshold: liquidationThresholdBps / 100,
+          });
 
-        if (userReceiptAddress && publicKey) {
-          const receiptInfo = await connection.getAccountInfo(userReceiptAddress);
-          if (receiptInfo) {
-            const userReceipt = decodeAccount(userReceiptLayout, receiptInfo.data);
-            const deposit = toNumber(userReceipt.deposited_collateral);
-            const borrow = toNumber(userReceipt.borrowed_amount);
-            const healthFactor =
-              borrow > 0 ? Math.floor((deposit * liquidationThresholdBps) / borrow) : 0;
-            setMyPosition({
-              deposit,
-              borrow,
-              shares: toNumber(userReceipt.shares),
-              healthFactor,
-              protectionTier: userReceipt.protection_tier,
-              protectionExpiry: Number(userReceipt.protection_expiry),
-              lastUpdateTimestamp: Number(userReceipt.last_update_timestamp),
-            });
+          if (userReceiptAddress && publicKey) {
+            const receiptInfo = await connection.getAccountInfo(userReceiptAddress);
+            if (receiptInfo) {
+              const userReceipt = safeDecodeAccount(userReceiptLayout, receiptInfo.data);
+              if (userReceipt) {
+                const deposit = toNumber(userReceipt.deposited_collateral);
+                const borrow = toNumber(userReceipt.borrowed_amount);
+                const healthFactor =
+                  borrow > 0 ? Math.floor((deposit * liquidationThresholdBps) / borrow) : 0;
+                setMyPosition({
+                  deposit,
+                  borrow,
+                  shares: toNumber(userReceipt.shares),
+                  healthFactor,
+                  protectionTier: userReceipt.protection_tier,
+                  protectionExpiry: Number(userReceipt.protection_expiry),
+                  lastUpdateTimestamp: Number(userReceipt.last_update_timestamp),
+                });
+              } else {
+                setMyPosition(null);
+              }
+            } else {
+              setMyPosition(null);
+            }
           } else {
             setMyPosition(null);
           }
-        } else {
-          setMyPosition(null);
         }
       }
 
@@ -563,8 +589,12 @@ export const useVeilLend = (mint?: PublicKey) => {
         const usdcVaultAddress = deriveVaultPda(programId, USDC_MINT);
         const usdcVaultInfo = await connection.getAccountInfo(usdcVaultAddress);
         if (usdcVaultInfo) {
-          const usdcVaultAccount = decodeAccount(vaultLayout, usdcVaultInfo.data);
-          setUsdcVaultCollateralLamports(toNumber(usdcVaultAccount.total_collateral));
+          const usdcVaultAccount = safeDecodeAccount(vaultLayout, usdcVaultInfo.data);
+          if (usdcVaultAccount) {
+            setUsdcVaultCollateralLamports(toNumber(usdcVaultAccount.total_collateral));
+          } else {
+            setUsdcVaultCollateralLamports(0);
+          }
         } else {
           setUsdcVaultCollateralLamports(0);
         }
@@ -573,9 +603,14 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (merkleTreeAddress) {
         const treeInfo = await connection.getAccountInfo(merkleTreeAddress);
         if (treeInfo) {
-          const tree = decodeAccount(merkleTreeLayout, treeInfo.data);
-          setMerkleRoot(Uint8Array.from(tree.root));
-          setMerkleNextIndex(Number(tree.next_index));
+          const tree = safeDecodeAccount(merkleTreeLayout, treeInfo.data);
+          if (tree) {
+            setMerkleRoot(Uint8Array.from(tree.root));
+            setMerkleNextIndex(Number(tree.next_index));
+          } else {
+            setMerkleRoot(null);
+            setMerkleNextIndex(null);
+          }
         } else if (E2E_TEST_MODE) {
           setMerkleRoot(new Uint8Array(32));
           setMerkleNextIndex(0);
@@ -624,8 +659,12 @@ export const useVeilLend = (mint?: PublicKey) => {
     merkleTreeAddress,
   ]);
 
+  const initialRefreshDone = useRef(false);
   useEffect(() => {
-    refresh();
+    if (!initialRefreshDone.current) {
+      refresh();
+      initialRefreshDone.current = true;
+    }
   }, [refresh]);
 
   useEffect(() => {
@@ -634,6 +673,13 @@ export const useVeilLend = (mint?: PublicKey) => {
     }, 15000);
     return () => window.clearInterval(interval);
   }, [refresh]);
+
+  // Trigger immediate refresh when wallet connects/disconnects
+  useEffect(() => {
+    if (publicKey) {
+      refresh();
+    }
+  }, [publicKey, refresh]);
 
   const createInitialNote = useCallback(async () => {
     if (!walletAddress) {
@@ -823,7 +869,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
       const collateralSymbol = resolveCollateralSymbol(collateral);
@@ -939,7 +988,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -990,15 +1042,9 @@ export const useVeilLend = (mint?: PublicKey) => {
       const signature = await sendTransaction([ix], instructions);
 
       const unspentNotes = getUnspentNotes(publicKey.toBase58(), vaultAddress.toBase58());
-      const secrets = loadSecrets(publicKey.toBase58());
-      if (unspentNotes.length > 0 && secrets) {
+      if (unspentNotes.length > 0) {
         const noteToSpend = unspentNotes[0];
-        if (!isNullifierSpent(noteToSpend.nullifier)) {
-          const spendProof = await generateSpendProof(noteToSpend, secrets, publicKey.toBase58());
-          setLastSpendProof(spendProof);
-          markNullifierSpent(noteToSpend.nullifier);
-          markNoteSpent(publicKey.toBase58(), noteToSpend.nullifier, signature);
-        }
+        markNoteSpent(publicKey.toBase58(), noteToSpend.nullifier, signature);
       }
 
       await refresh();
@@ -1029,7 +1075,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const borrowMint = vaultAccount.borrow_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -1155,7 +1204,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const repayMint = vaultAccount.borrow_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -1276,7 +1328,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
       const collateralSymbol = resolveCollateralSymbol(collateral);
@@ -1340,12 +1395,12 @@ export const useVeilLend = (mint?: PublicKey) => {
       });
       const commitment = Array.from(fromHex(newNote.commitment));
 
-      let zkProof: ActionResult['proof'];
+      let zkProofResult: ZkProofResult | null = null;
 
       let ix: TransactionInstruction;
       if (hasExistingNote && activeNote) {
         const proof = await buildMerkleProofForNote(activeNote, vaultAddress);
-        const inputs = await buildZkInputs({
+        zkProofResult = await generateZkActionProof({
           action: 'supply',
           oldNote: activeNote,
           newNote,
@@ -1353,7 +1408,6 @@ export const useVeilLend = (mint?: PublicKey) => {
           collateralSymbol,
           deltaAmount: BigInt(amount),
         });
-        zkProof = await generateZkProof('supply', inputs);
         ix = new TransactionInstruction({
           programId,
           keys: [
@@ -1386,6 +1440,7 @@ export const useVeilLend = (mint?: PublicKey) => {
             new_commitment: commitment,
             nullifier: Array.from(fromHex(activeNote.nullifier)),
             note_hash: Array.from(noteHashBytes),
+            proof: zkProofResult.proof,
             merkle_proof: proof.proof.map((node) => Array.from(node)),
             merkle_path: proof.path,
           }),
@@ -1424,7 +1479,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       }
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return { signature, proof: zkProof };
+      return { signature, proof: zkProofResult ?? undefined };
     },
     [
       arciumClient,
@@ -1460,7 +1515,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const borrowMint = vaultAccount.borrow_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -1540,7 +1598,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
       });
 
-      const inputs = await buildZkInputs({
+      const zkProofResult = await generateZkActionProof({
         action: 'borrow',
         oldNote: activeNote,
         newNote,
@@ -1548,7 +1606,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
         deltaAmount: BigInt(amount),
       });
-      const zkProof = await generateZkProof('borrow', inputs);
+      const zkProof = zkProofResult.proof;
 
       const ix = new TransactionInstruction({
         programId,
@@ -1596,6 +1654,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
           note_hash: Array.from(noteHashBytes),
+          proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1605,7 +1664,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return { signature, proof: zkProof };
+      return { signature, proof: zkProofResult };
     },
     [
       arciumClient,
@@ -1640,7 +1699,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const repayMint = vaultAccount.borrow_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -1715,7 +1777,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
       });
 
-      const inputs = await buildZkInputs({
+      const zkProofResult = await generateZkActionProof({
         action: 'repay',
         oldNote: activeNote,
         newNote,
@@ -1723,7 +1785,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
         deltaAmount: deltaRepay,
       });
-      const zkProof = await generateZkProof('repay', inputs);
+      const zkProof = zkProofResult.proof;
 
       const ix = new TransactionInstruction({
         programId,
@@ -1768,6 +1830,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
           note_hash: Array.from(noteHashBytes),
+          proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1777,7 +1840,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return { signature, proof: zkProof };
+      return { signature, proof: zkProofResult };
     },
     [
       arciumClient,
@@ -1811,7 +1874,10 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!vaultInfo) {
         throw new Error('Vault not initialized');
       }
-      const vaultAccount = decodeAccount(vaultLayout, vaultInfo.data);
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+         throw new Error('Vault state invalid');
+      }
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
 
@@ -1864,7 +1930,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
       });
 
-      const inputs = await buildZkInputs({
+      const zkProofResult = await generateZkActionProof({
         action: 'withdraw',
         oldNote: activeNote,
         newNote,
@@ -1872,7 +1938,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         collateralSymbol,
         deltaAmount: collateralReturned,
       });
-      const zkProof = await generateZkProof('withdraw', inputs);
+      const zkProof = zkProofResult.proof;
 
       const ix = new TransactionInstruction({
         programId,
@@ -1908,6 +1974,7 @@ export const useVeilLend = (mint?: PublicKey) => {
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
           note_hash: Array.from(noteHashBytes),
+          proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
@@ -1917,7 +1984,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
-      return { signature, proof: zkProof };
+      return { signature, proof: zkProofResult };
     },
     [
       arciumClient,
@@ -1985,9 +2052,10 @@ export const useVeilLend = (mint?: PublicKey) => {
     return { signature, proof: buildE2eProof(signature) };
   }, []);
 
+
   const fastAdapter = useMemo(
     () =>
-      E2E_TEST_MODE
+      shouldMockAdapters()
         ? createFastAdapter({
             deposit: e2eFastAction,
             withdraw: e2eFastAction,
@@ -2005,7 +2073,7 @@ export const useVeilLend = (mint?: PublicKey) => {
 
   const secureAdapter = useMemo(
     () =>
-      E2E_TEST_MODE
+      shouldMockAdapters()
         ? createFastAdapter({
             deposit: e2eSecureAction,
             withdraw: e2eSecureAction,
@@ -2040,7 +2108,6 @@ export const useVeilLend = (mint?: PublicKey) => {
     borrowCapacityLamports,
     note,
     privacyNotes,
-    lastSpendProof,
     myPosition,
     displayPosition,
     vaultStats,
