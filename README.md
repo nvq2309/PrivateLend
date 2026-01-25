@@ -86,10 +86,42 @@ anchor deploy
 
 ## Tests
 
-UI acceptance tests (Playwright):
+### UI Acceptance Tests (Playwright)
 
+**Prerequisites:**
+1. Install browsers: `npx playwright install`
+2. Build the frontend: `npm run build`
+
+**Run all UI tests:**
 ```bash
 npm run test:ui
+```
+
+**Run specific test file:**
+```bash
+npx playwright test tests/ui/randomized.spec.ts
+```
+
+**Run with visible browser:**
+```bash
+npx playwright test --headed
+```
+
+### Massive Randomized E2E Tests (120 tests, 5-8 actions each)
+
+Run the full 120-test randomized suite:
+```bash
+npx playwright test tests/ui/massive_randomized.spec.ts
+```
+
+With custom seed for reproducibility:
+```bash
+TEST_SEED=my-seed npx playwright test tests/ui/massive_randomized.spec.ts
+```
+
+Run in headed mode to watch:
+```bash
+npx playwright test tests/ui/massive_randomized.spec.ts --headed
 ```
 
 On-chain tests (Anchor):
@@ -104,7 +136,39 @@ Anchor tests against an already-running validator:
 anchor test --skip-local-validator
 ```
 
-SDK-only tests (Mocha):
+### New Smart Contract Tests
+
+Run LTV-specific withdrawal tests:
+
+```bash
+COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Withdraw with LTV"
+```
+
+Run randomized LTV tests:
+
+```bash
+# Default seed
+COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Randomized"
+
+# Custom seed for reproducibility
+TEST_SEED=my-custom-seed COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Randomized"
+```
+
+### Comprehensive SC Security Tests (150 Scenarios)
+
+Run the full 150-scenario security test suite:
+
+```bash
+# Run all 150 randomized multi-action scenarios
+COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Comprehensive"
+
+# With custom seed for reproducibility
+TEST_SEED=security-audit-2024 COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Comprehensive"
+```
+
+Each scenario contains 5-8 mixed actions (supply, borrow, repay, withdraw) across 2 wallets, validating LTV constraints throughout.
+
+### SDK-only Tests (Mocha)
 
 ```bash
 npx ts-mocha -p tsconfig.tests.json tests/privacy_phase.ts
@@ -123,5 +187,6 @@ To copy wasm/zkey artifacts into the web app (public/zk):
 
 ## Troubleshooting
 
+- **UI tests fail with "completed successfully" not found**: Make sure you ran `npm run build` before tests. The Playwright config serves from `dist/`.
 - macOS Anchor test archive error: `rm -rf .anchor/test-ledger` then rerun with `COPYFILE_DISABLE=1`.
 - Anchor test runner excludes Playwright specs via `Anchor.toml`.
