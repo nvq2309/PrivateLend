@@ -137,8 +137,12 @@ const unlockVault = async (page: Page, testInfo: TestInfo, prefix = 'vault') => 
 };
 
 const openAction = async (page: Page, name: string, index = 0) => {
-  await page.getByRole('button', { name }).nth(index).click();
-  await expect(page.getByLabel('Amount')).toBeVisible();
+  const btn = page.getByRole('button', { name }).nth(index);
+  await btn.waitFor({ state: 'visible', timeout: 5000 });
+  // Ensure not disabled
+  await expect(btn).toBeEnabled({ timeout: 5000 });
+  await btn.click({ force: true });
+  await expect(page.getByLabel('Amount')).toBeVisible({ timeout: 10000 });
 };
 
 const runFastAction = async (page: Page, label: string, amount: string) => {

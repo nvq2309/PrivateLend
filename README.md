@@ -11,7 +11,8 @@ Privacy-first lending broker on Solana. This repo contains:
 ## Quick Start
 
 ```bash
-npm install
+# Clean install recommended to avoid dependency issues
+rm -rf node_modules package-lock.json && npm install
 ```
 
 ## Environment Setup
