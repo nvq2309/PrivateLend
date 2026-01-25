@@ -410,7 +410,6 @@ export class ScenarioRunner {
 
     wallet.currentNote = newNote;
     wallet.commitment = newCommitment;
-    wallet.noteHash = new Uint8Array(newNoteHash);
     this.merkleTreeLeaves.push(newCommitment);
   }
 
@@ -510,7 +509,6 @@ export class ScenarioRunner {
 
     wallet.currentNote = newNote;
     wallet.commitment = newCommitment;
-    wallet.noteHash = new Uint8Array(newNoteHash);
     this.merkleTreeLeaves.push(newCommitment);
   }
 
@@ -613,7 +611,6 @@ export class ScenarioRunner {
 
     wallet.currentNote = newNote;
     wallet.commitment = newCommitment;
-    wallet.noteHash = new Uint8Array(newNoteHash);
     this.merkleTreeLeaves.push(newCommitment);
   }
 }
