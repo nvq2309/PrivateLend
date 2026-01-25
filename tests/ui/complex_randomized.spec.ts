@@ -68,7 +68,10 @@ const WALLET_CONFIG = [
 ];
 
 const waitForTestWallet = async (page: Page) => {
-  await page.waitForFunction(() => Boolean((window as any).__VEILLEND_TEST_WALLET__));
+  await page.waitForFunction(
+    () => Boolean((window as any).__VEILLEND_TEST_WALLET__),
+    { timeout: 30000 }
+  );
 };
 
 const initE2ePage = async (page: Page, walletIdx: number) => {
@@ -89,6 +92,7 @@ const initE2ePage = async (page: Page, walletIdx: number) => {
   };
 
   await page.addInitScript(({ secret, publicKey }) => {
+    localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     if (secret) (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
     if (publicKey) (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey;

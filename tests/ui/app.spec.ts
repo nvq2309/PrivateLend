@@ -15,7 +15,10 @@ const getStoredNote = async (page: Page) =>
   });
 
 const waitForTestWallet = async (page: Page) => {
-  await page.waitForFunction(() => Boolean((window as any).__VEILLEND_TEST_WALLET__));
+  await page.waitForFunction(
+    () => Boolean((window as any).__VEILLEND_TEST_WALLET__),
+    { timeout: 30000 }
+  );
 };
 
 const bindE2eNavigation = (page: Page) => {
@@ -239,6 +242,7 @@ test.beforeEach(async ({ page }) => {
   bindE2eNavigation(page);
   await page.addInitScript(() => {
     localStorage.clear();
+    localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     (window as any).__VEILLEND_E2E_BALANCES__ = undefined;
     (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = undefined;

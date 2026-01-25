@@ -119,7 +119,10 @@ const WALLET_2_SECRET = WALLET_2_PRIVATE_KEY ? decodeBase58(WALLET_2_PRIVATE_KEY
 // ============== Helpers ==============
 
 const waitForTestWallet = async (page: Page) => {
-  await page.waitForFunction(() => Boolean((window as any).__VEILLEND_TEST_WALLET__));
+  await page.waitForFunction(
+    () => Boolean((window as any).__VEILLEND_TEST_WALLET__),
+    { timeout: 30000 }
+  );
 };
 
 const bindE2eNavigation = (page: Page) => {
@@ -148,6 +151,7 @@ const initE2ePage = async (
   bindE2eNavigation(page);
   await page.addInitScript(({ secret, publicKey, e2eBalances }) => {
     localStorage.clear();
+    localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     if (secret) (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
     if (publicKey) (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey;

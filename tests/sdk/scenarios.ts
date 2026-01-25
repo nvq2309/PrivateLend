@@ -385,6 +385,7 @@ export class ScenarioRunner {
       .borrowSecure(
         new BN(amount.toString()),
         encryptedBalance,
+        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
@@ -483,6 +484,7 @@ export class ScenarioRunner {
       .repaySecure(
         new BN(amount.toString()),
         encryptedBalance,
+        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
@@ -583,6 +585,7 @@ export class ScenarioRunner {
       .withdrawSecure(
         new BN(amount.toString()),
         encryptedBalance,
+        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
