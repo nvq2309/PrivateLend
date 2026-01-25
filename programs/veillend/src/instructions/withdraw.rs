@@ -69,11 +69,6 @@ pub fn withdraw(
     }
 
     require!(
-        ctx.accounts.user_receipt.borrowed_amount == 0,
-        VeilLendError::OutstandingDebt
-    );
-
-    require!(
         ctx.accounts.user_receipt.shares >= shares_to_burn,
         VeilLendError::InsufficientShares
     );
@@ -93,6 +88,26 @@ pub fn withdraw(
         ctx.accounts.user_receipt.deposited_collateral >= collateral_to_return,
         VeilLendError::InsufficientCollateral
     );
+
+    // LTV-based withdrawal validation
+    // Allow withdrawal if remaining collateral maintains healthy LTV ratio
+    let remaining_collateral = ctx.accounts.user_receipt.deposited_collateral
+        .checked_sub(collateral_to_return)
+        .ok_or(VeilLendError::MathOverflow)?;
+
+    if ctx.accounts.user_receipt.borrowed_amount > 0 {
+        let ltv_bps = ctx.accounts.vault.ltv_bps.min(MAX_LTV_BPS);
+        let max_borrow_allowed = (remaining_collateral as u128)
+            .checked_mul(ltv_bps as u128)
+            .ok_or(VeilLendError::MathOverflow)?
+            .checked_div(BPS_DENOMINATOR as u128)
+            .ok_or(VeilLendError::MathOverflow)? as u64;
+
+        require!(
+            ctx.accounts.user_receipt.borrowed_amount <= max_borrow_allowed,
+            VeilLendError::BorrowLimitExceeded
+        );
+    }
 
     let burn_ctx = CpiContext::new(
         ctx.accounts.token_program.to_account_info(),

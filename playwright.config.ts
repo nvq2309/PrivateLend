@@ -14,10 +14,12 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     trace: 'on-first-retry',
+    viewport: { width: 1280, height: 1111 },
+    deviceScaleFactor: 1,
   },
   webServer: {
     command: 'npm run dev -- --mode e2e --host 127.0.0.1 --port 4173',
     url: 'http://localhost:4173',
-    reuseExistingServer: false,
+    reuseExistingServer: true,
   },
 });

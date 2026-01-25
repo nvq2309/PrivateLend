@@ -124,6 +124,26 @@ const run = async () => {
   await maybeAirdrop(connection, deployer.publicKey, 5, 'DEPLOYER');
   await maybeAirdrop(connection, publicWalletPubkey, 2, 'PUBLIC_WALLET');
 
+  // Airdrop to E2E test wallets if configured
+  const e2eWallet1Pubkey = process.env.E2E_WALLET_1_PUBLIC_KEY;
+  const e2eWallet2Pubkey = process.env.E2E_WALLET_2_PUBLIC_KEY;
+  if (e2eWallet1Pubkey) {
+    try {
+      const wallet1 = new PublicKey(e2eWallet1Pubkey);
+      await maybeAirdrop(connection, wallet1, 10, 'E2E_WALLET_1');
+    } catch (err) {
+      console.warn('[airdrop] E2E_WALLET_1 invalid:', err);
+    }
+  }
+  if (e2eWallet2Pubkey) {
+    try {
+      const wallet2 = new PublicKey(e2eWallet2Pubkey);
+      await maybeAirdrop(connection, wallet2, 10, 'E2E_WALLET_2');
+    } catch (err) {
+      console.warn('[airdrop] E2E_WALLET_2 invalid:', err);
+    }
+  }
+
   const collateralMintAddress =
     process.env.VITE_COLLATERAL_MINT ?? 'So11111111111111111111111111111111111111112';
   const collateralMint = new PublicKey(collateralMintAddress);

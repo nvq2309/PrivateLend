@@ -6,6 +6,7 @@ use crate::constants::*;
 use crate::errors::VeilLendError;
 use crate::merkle::{append_leaf, verify_merkle_proof};
 use crate::state::*;
+use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16Proof, ZkAction};
 
 #[derive(Accounts)]
 #[instruction(
@@ -14,7 +15,9 @@ use crate::state::*;
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
+    proof: Groth16Proof,
+    merkle_proof: Vec<[u8; 32]>,
+    merkle_path: Vec<u8>,
 )]
 pub struct WithdrawSecure<'info> {
     #[account(mut)]
@@ -29,7 +32,7 @@ pub struct WithdrawSecure<'info> {
 
     #[account(
         mut,
-        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_receipt.note_hash.as_ref()],
         bump = note_receipt.bump,
     )]
     pub note_receipt: Box<Account<'info, NoteReceipt>>,
@@ -88,7 +91,7 @@ pub fn withdraw_secure(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
+    proof: Groth16Proof,
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
 ) -> Result<()> {
@@ -97,14 +100,15 @@ pub fn withdraw_secure(
     if is_zero_pubkey(&ctx.accounts.note_receipt.client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
     }
-    if ctx.accounts.note_receipt.note_hash != note_hash {
-        return err!(VeilLendError::InvalidNoteHash);
-    }
 
-    require!(
-        ctx.accounts.note_receipt.borrowed_amount == 0,
-        VeilLendError::OutstandingDebt
-    );
+    let nullifier_hash = poseidon_nullifier_hash(&nullifier)?;
+    let public_inputs = [
+        ctx.accounts.merkle_tree.root,
+        nullifier_hash,
+        current_commitment,
+        new_commitment,
+    ];
+    verify_groth16_proof(ZkAction::Withdraw, &proof, &public_inputs)?;
 
     require!(
         ctx.accounts.note_receipt.shares >= shares_to_burn,
@@ -141,11 +145,31 @@ pub fn withdraw_secure(
         VeilLendError::InsufficientCollateral
     );
 
+    // LTV-based withdrawal validation
+    // Allow withdrawal if remaining collateral maintains healthy LTV ratio
+    let remaining_collateral = ctx.accounts.note_receipt.deposited_collateral
+        .checked_sub(collateral_to_return)
+        .ok_or(VeilLendError::MathOverflow)?;
+
+    if ctx.accounts.note_receipt.borrowed_amount > 0 {
+        let ltv_bps = ctx.accounts.vault.ltv_bps.min(MAX_LTV_BPS);
+        let max_borrow_allowed = (remaining_collateral as u128)
+            .checked_mul(ltv_bps as u128)
+            .ok_or(VeilLendError::MathOverflow)?
+            .checked_div(BPS_DENOMINATOR as u128)
+            .ok_or(VeilLendError::MathOverflow)? as u64;
+
+        require!(
+            ctx.accounts.note_receipt.borrowed_amount <= max_borrow_allowed,
+            VeilLendError::BorrowLimitExceeded
+        );
+    }
+
     let vault_key = ctx.accounts.vault.key();
     let note_seeds = &[
         NOTE_RECEIPT_SEED,
         vault_key.as_ref(),
-        note_hash.as_ref(),
+        ctx.accounts.note_receipt.note_hash.as_ref(),
         &[ctx.accounts.note_receipt.bump],
     ];
     let note_signer_seeds = &[&note_seeds[..]];
