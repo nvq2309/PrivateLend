@@ -27,7 +27,7 @@ if [ -f "target/idl/veillend.json" ]; then
 fi
 
 echo "[bootstrap] deploying program..."
-anchor deploy
+anchor deploy --provider.cluster devnet
 
 echo "[bootstrap] running bootstrap..."
 node scripts/bootstrap.mjs
