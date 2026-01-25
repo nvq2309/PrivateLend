@@ -581,7 +581,7 @@ export class ScenarioRunner {
 
     await this.program.methods
       .withdrawSecure(
-        receipt.shares, 
+        new BN(amount.toString()),
         encryptedBalance,
         Array.from(wallet.commitment),
         Array.from(newCommitment),
