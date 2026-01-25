@@ -70,6 +70,55 @@ Preview:
 npm run preview
 ```
 
+## Deployment
+
+### Localnet (Development)
+
+The `scripts/bootstrap-localnet.sh` script automates the process of:
+1. Building the Anchor program.
+2. Starting a local validator (if not running, manually start it first if preferred).
+3. Deploying the program.
+4. bootstrapping initial state (mints, vault initialization).
+
+```bash
+# Start validator first in a separate terminal
+./scripts/start-validator.sh
+
+# Run deployment and bootstrap
+./scripts/bootstrap-localnet.sh
+```
+
+### Devnet
+
+To deploy to Solana Devnet:
+
+1. ensure you have a valid keypair with Devnet SOL (~5 SOL recommended).
+2. Configure `.env` with your devnet RPC and keypair path.
+
+```bash
+# Set your keypair
+export DEPLOYER_KEYPAIR=~/.config/solana/id.json
+
+# Run devnet bootstrap
+./scripts/bootstrap-devnet.sh
+```
+
+**Note:** The script will define `CHAIN="devnet"` and use `https://api.devnet.solana.com` by default.
+
+### Testnet
+
+Deployment to Testnet follows the same pattern as Devnet, but requires updating the RPC URL and Cluster settings manually or creating a `bootstrap-testnet.sh` variant.
+
+```bash
+export CHAIN="testnet"
+export SOLANA_RPC_URL="https://api.testnet.solana.com"
+export DEPLOYER_KEYPAIR=~/.config/solana/id.json
+
+anchor build
+anchor deploy --provider.cluster testnet
+node scripts/bootstrap.mjs
+```
+
 ## Programs (Anchor)
 
 Build programs:
@@ -141,6 +190,9 @@ anchor test --skip-local-validator
 Run LTV-specific withdrawal tests:
 
 ```bash
+# Ensure local validator is running first:
+# ./scripts/start-validator.sh
+
 COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Withdraw with LTV"
 ```
 
@@ -159,6 +211,9 @@ TEST_SEED=my-custom-seed COPYFILE_DISABLE=1 anchor test --skip-local-validator -
 Run the full 150-scenario security test suite:
 
 ```bash
+# Ensure local validator is running:
+# ./scripts/start-validator.sh
+
 # Run all 150 randomized multi-action scenarios
 COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Comprehensive"
 
