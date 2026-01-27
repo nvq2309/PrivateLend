@@ -2,6 +2,7 @@ import type { PrivacyNoteV2 } from './commitment';
 import type { MerkleProof } from './merkle';
 import { bigintToBytesBE } from './poseidon';
 import { buildZkInputs } from './zkInputs';
+import { getCachedProof, setCachedProof } from './proofCache';
 import {
   generateZkProof,
   type Groth16Proof,
@@ -58,6 +59,15 @@ export const generateZkActionProof = async (
     deltaAmount: params.deltaAmount,
   });
 
+  const cached = await getCachedProof(params.action, inputs);
+  if (cached) {
+    return {
+      proof: cached.proof,
+      publicSignals: cached.publicSignals,
+      rawProof: cached.rawProof,
+    };
+  }
+
   if (isBrowser()) {
     return generateZkProof(params.action, inputs);
   }
@@ -65,11 +75,13 @@ export const generateZkActionProof = async (
   const { groth16 } = await import('snarkjs');
   const { wasm, zkey } = await getNodeArtifacts(params.action);
   const proofData = await groth16.fullProve(inputs, wasm, zkey);
-  return {
+  const result = {
     proof: toGroth16Proof(proofData.proof),
     publicSignals: proofData.publicSignals,
     rawProof: proofData.proof,
   };
+  await setCachedProof(params.action, inputs, result);
+  return result;
 };
 
 export const verifyZkActionProof = async (

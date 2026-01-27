@@ -128,7 +128,7 @@ export const computeCommitment = async (params: {
 };
 
 export const computeNullifierHash = async (nullifier: Uint8Array): Promise<string> => {
-  const hash = await poseidonHash([bytesToBigIntBE(nullifier)]);
+  const hash = await poseidonHash([bytesToBigIntBE(nullifier), 0n]);
   return toHex(bigintToBytesBE(hash, 32));
 };
 
