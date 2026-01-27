@@ -8,6 +8,10 @@ Privacy-first lending broker on Solana. This repo contains:
 - Demo bootstrap scripts in `scripts/`
 - ZK circuits in `circuits/veillend`
 
+## Agent Workflow
+This repo uses an agentic SDLC workflow stored in `.agent-workflow/`.
+Start here: `.agent-workflow/README.md` and `.agent-workflow/AGENTS.md`.
+
 ## Quick Start
 
 ```bash
@@ -194,17 +198,17 @@ Run LTV-specific withdrawal tests:
 # Ensure local validator is running first:
 # ./scripts/start-validator.sh
 
-COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Withdraw with LTV"
+TEST_GREP="Withdraw with LTV" COPYFILE_DISABLE=1 anchor test --skip-local-validator
 ```
 
 Run randomized LTV tests:
 
 ```bash
 # Default seed
-COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Randomized"
+TEST_GREP="Randomized" COPYFILE_DISABLE=1 anchor test --skip-local-validator
 
 # Custom seed for reproducibility
-TEST_SEED=my-custom-seed COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Randomized"
+TEST_SEED=my-custom-seed TEST_GREP="Randomized" COPYFILE_DISABLE=1 anchor test --skip-local-validator
 ```
 
 ### Comprehensive SC Security Tests (150 Scenarios)
@@ -216,10 +220,10 @@ Run the full 150-scenario security test suite:
 # ./scripts/start-validator.sh
 
 # Run all 150 randomized multi-action scenarios
-COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Comprehensive"
+TEST_GREP="Comprehensive" COPYFILE_DISABLE=1 anchor test --skip-local-validator
 
 # With custom seed for reproducibility
-TEST_SEED=security-audit-2024 COPYFILE_DISABLE=1 anchor test --skip-local-validator -- --grep "Comprehensive"
+TEST_SEED=security-audit-2024 TEST_GREP="Comprehensive" COPYFILE_DISABLE=1 anchor test --skip-local-validator
 ```
 
 Each scenario contains 5-8 mixed actions (supply, borrow, repay, withdraw) across 2 wallets, validating LTV constraints throughout.
@@ -238,8 +242,19 @@ for build and proof generation steps.
 To copy wasm/zkey artifacts into the web app (public/zk):
 
 ```bash
-./scripts/prepare-zk-artifacts.sh
+bash ./scripts/prepare-zk-artifacts.sh
 ```
+
+## Known Limitations
+
+- SECURE end-to-end tests are not yet passing (see AT-SECURE-001/002).
+- Proof cache invalidation depends on `/public/zk/manifest.json`; ensure artifacts are refreshed after circuit rebuilds.
+
+## Security Notes (Web3)
+
+- Threat model: assumes validator honesty for syscall correctness and trusted setup integrity for Groth16.
+- Key management: note strings and nullifiers are treated as secrets; do not log or share outside the holder.
+- Non-goals: privacy against a compromised client device or leaked note strings.
 
 ## Troubleshooting
 
