@@ -12,7 +12,6 @@ use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16P
 #[instruction(
     shares_to_burn: u64,
     encrypted_balance: [u8; 32],
-    note_hash: [u8; 32],
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
@@ -32,11 +31,10 @@ pub struct WithdrawSecure<'info> {
     pub vault: Box<Account<'info, Vault>>,
 
     #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + NoteReceipt::INIT_SPACE,
-        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
-        bump,
+        mut,
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_receipt.note_hash.as_ref()],
+        bump = note_receipt.bump,
+        constraint = note_receipt.vault == vault.key(),
     )]
     pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
@@ -91,7 +89,6 @@ pub fn withdraw_secure(
     ctx: Context<WithdrawSecure>,
     shares_to_burn: u64,
     encrypted_balance: [u8; 32],
-    note_hash: [u8; 32],
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
@@ -101,16 +98,7 @@ pub fn withdraw_secure(
 ) -> Result<()> {
     require!(shares_to_burn > 0, VeilLendError::InsufficientShares);
 
-    let vault = &mut ctx.accounts.vault;
     let note_receipt = &mut ctx.accounts.note_receipt;
-
-    // Initialize if this is a new account
-    if note_receipt.bump == 0 {
-        note_receipt.bump = ctx.bumps.note_receipt;
-        note_receipt.note_hash = note_hash;
-        note_receipt.vault = vault.key();
-        note_receipt.last_update_timestamp = Clock::get()?.unix_timestamp;
-    }
 
     if is_zero_pubkey(&note_receipt.client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
@@ -162,7 +150,10 @@ pub fn withdraw_secure(
 
     // LTV-based withdrawal validation
     // Allow withdrawal if remaining collateral maintains healthy LTV ratio
-    let remaining_collateral = ctx.accounts.note_receipt.deposited_collateral
+    let remaining_collateral = ctx
+        .accounts
+        .note_receipt
+        .deposited_collateral
         .checked_sub(collateral_to_return)
         .ok_or(VeilLendError::MathOverflow)?;
 

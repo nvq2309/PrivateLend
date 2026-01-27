@@ -91,7 +91,10 @@ pub fn withdraw(
 
     // LTV-based withdrawal validation
     // Allow withdrawal if remaining collateral maintains healthy LTV ratio
-    let remaining_collateral = ctx.accounts.user_receipt.deposited_collateral
+    let remaining_collateral = ctx
+        .accounts
+        .user_receipt
+        .deposited_collateral
         .checked_sub(collateral_to_return)
         .ok_or(VeilLendError::MathOverflow)?;
 

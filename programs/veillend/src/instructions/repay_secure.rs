@@ -14,7 +14,6 @@ use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16P
 #[instruction(
     amount: u64,
     encrypted_balance: [u8; 32],
-    note_hash: [u8; 32],
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
@@ -34,11 +33,10 @@ pub struct RepaySecure<'info> {
     pub vault: Box<Account<'info, Vault>>,
 
     #[account(
-        init_if_needed,
-        payer = user,
-        space = 8 + NoteReceipt::INIT_SPACE,
-        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
-        bump,
+        mut,
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_receipt.note_hash.as_ref()],
+        bump = note_receipt.bump,
+        constraint = note_receipt.vault == vault.key(),
     )]
     pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
@@ -75,7 +73,6 @@ pub fn repay_secure<'info>(
     ctx: Context<'_, '_, '_, 'info, RepaySecure<'info>>,
     amount: u64,
     encrypted_balance: [u8; 32],
-    note_hash: [u8; 32],
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
@@ -88,14 +85,6 @@ pub fn repay_secure<'info>(
 
     let vault = &mut ctx.accounts.vault;
     let note_receipt = &mut ctx.accounts.note_receipt;
-
-    // Initialize if this is a new account
-    if note_receipt.bump == 0 {
-        note_receipt.bump = ctx.bumps.note_receipt;
-        note_receipt.note_hash = note_hash;
-        note_receipt.vault = vault.key();
-        note_receipt.last_update_timestamp = Clock::get()?.unix_timestamp;
-    }
 
     let repay_amount = amount.min(note_receipt.borrowed_amount);
     require!(repay_amount > 0, VeilLendError::InsufficientCollateral);
