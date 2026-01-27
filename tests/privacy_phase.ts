@@ -1,6 +1,9 @@
-import { expect } from 'chai';
-import { webcrypto } from 'crypto';
+/// <reference path="./types/snarkjs.d.ts" />
 import { Keypair } from '@solana/web3.js';
+import { expect } from 'chai';
+import { webcrypto } from 'node:crypto';
+import path from 'node:path';
+import * as snarkjs from 'snarkjs';
 
 import {
   buildNoteSeed,
@@ -13,6 +16,9 @@ import {
 } from '../src/sdk/notes';
 import {
   createPrivacyNote,
+  computeCommitment,
+  computeNullifierHash,
+  toHex,
   fromHex,
   verifyNoteOwnership,
   savePrivacyNote,
@@ -24,8 +30,9 @@ import {
 import { isNullifierSpent, markNullifierSpent, clearNullifierRegistry } from '../src/sdk/proof';
 import { getMerkleProof } from '../src/sdk/merkle';
 import { buildNoteStringFromPrivacyNote, buildPrivacyNoteFromNoteString, decodeNoteString } from '../src/sdk/noteString';
-import { bytesToBigIntBE, poseidonHash } from '../src/sdk/poseidon';
+import { bytesToBigIntBE, bigintToBytesBE, poseidonHash } from '../src/sdk/poseidon';
 import { buildZkInputs } from '../src/sdk/zkInputs';
+import { buildProofCacheKey, getCachedProof, hashZkInputs, setCachedProof } from '../src/sdk/proofCache';
 import {
   generateStealthKeypair,
   deriveStealthAddress,
@@ -45,9 +52,7 @@ class LocalStorageMock {
   private store: StorageMap = {};
 
   getItem(key: string) {
-    return Object.prototype.hasOwnProperty.call(this.store, key)
-      ? this.store[key]
-      : null;
+    return this.store[key] ?? null;
   }
 
   setItem(key: string, value: string) {
@@ -228,6 +233,42 @@ describe('Privacy Phase - SDK', () => {
   });
 
   describe('ZK input generation + nullifier registry', () => {
+    it('Commitment alignment matches circuit inputs', async () => {
+      const nullifier = new Uint8Array(32).fill(1);
+      const secret = new Uint8Array(32).fill(2);
+      const supplySol = 123n;
+      const supplyUsdc = 0n;
+      const borrowSol = 0n;
+      const borrowUsdc = 45n;
+      const timestamp = 1700000000123n;
+
+      const commitment = await computeCommitment({
+        nullifier,
+        secret,
+        supplySol,
+        supplyUsdc,
+        borrowSol,
+        borrowUsdc,
+        timestamp,
+      });
+
+      const expectedCommitment = await poseidonHash([
+        bytesToBigIntBE(nullifier),
+        bytesToBigIntBE(secret),
+        supplySol,
+        supplyUsdc,
+        borrowSol,
+        borrowUsdc,
+        timestamp,
+      ]);
+
+      expect(commitment).to.equal(toHex(bigintToBytesBE(expectedCommitment, 32)));
+
+      const nullifierHash = await computeNullifierHash(nullifier);
+      const expectedNullifierHash = await poseidonHash([bytesToBigIntBE(nullifier), 0n]);
+      expect(nullifierHash).to.equal(toHex(bigintToBytesBE(expectedNullifierHash, 32)));
+    });
+
     it('builds action inputs bound to merkle root', async () => {
       const ownerPubkey = new Uint8Array(32).fill(5);
       const vaultAddress = 'VaultPrivacyTest44444444444444444444444444';
@@ -251,7 +292,7 @@ describe('Privacy Phase - SDK', () => {
       });
 
       const leaves = [new Uint8Array(fromHex(oldNote.commitment))];
-      const merkleProof = await getMerkleProof(leaves, oldNote.noteIndex, 8);
+      const merkleProof = await getMerkleProof(leaves, oldNote.noteIndex, 4);
       const inputs = await buildZkInputs({
         action: 'supply',
         oldNote,
@@ -264,7 +305,10 @@ describe('Privacy Phase - SDK', () => {
       const expectedRoot = bytesToBigIntBE(merkleProof.root).toString();
       const expectedOldCommitment = bytesToBigIntBE(fromHex(oldNote.commitment)).toString();
       const expectedNewCommitment = bytesToBigIntBE(fromHex(newNote.commitment)).toString();
-      const nullifierHash = await poseidonHash([bytesToBigIntBE(fromHex(oldNote.nullifier))]);
+      const nullifierHash = await poseidonHash([
+        bytesToBigIntBE(fromHex(oldNote.nullifier)),
+        0n,
+      ]);
 
       expect(inputs.merkleRoot).to.equal(expectedRoot);
       expect(inputs.publicNullifierHash).to.equal(nullifierHash.toString());
@@ -279,6 +323,81 @@ describe('Privacy Phase - SDK', () => {
       expect(isNullifierSpent(nullifier)).to.equal(true);
       clearNullifierRegistry();
       expect(isNullifierSpent(nullifier)).to.equal(false);
+    });
+  });
+
+  describe('Proof generation', () => {
+    it('Proof generation for supply action', async () => {
+      const ownerPubkey = new Uint8Array(32).fill(4);
+      const vaultAddress = Keypair.generate().publicKey.toBase58();
+      const oldNote = await createPrivacyNote({
+        walletAddress,
+        ownerPubkey,
+        vaultAddress,
+        depositAmount: 1_000n,
+        borrowAmount: 0n,
+        noteIndex: 0,
+        collateralSymbol: 'SOL',
+      });
+      const newNote = await createPrivacyNote({
+        walletAddress,
+        ownerPubkey,
+        vaultAddress,
+        depositAmount: 1_500n,
+        borrowAmount: 0n,
+        noteIndex: 1,
+        collateralSymbol: 'SOL',
+      });
+
+      const leaves = [new Uint8Array(fromHex(oldNote.commitment))];
+      const merkleProof = await getMerkleProof(leaves, oldNote.noteIndex, 4);
+      const inputs = await buildZkInputs({
+        action: 'supply',
+        oldNote,
+        newNote,
+        merkleProof,
+        collateralSymbol: 'SOL',
+        deltaAmount: 500n,
+      });
+
+      const wasmPath = path.resolve(process.cwd(), 'public/zk/supply/supply.wasm');
+      const zkeyPath = path.resolve(process.cwd(), 'public/zk/supply/setup_final.zkey');
+      const { proof, publicSignals } = await snarkjs.groth16.fullProve(inputs, wasmPath, zkeyPath);
+
+      expect(proof).to.be.ok;
+      expect(publicSignals).to.be.an('array').that.is.not.empty;
+    });
+  });
+
+  describe('Proof cache', () => {
+    it('caches proofs by artifact version and input hash', async () => {
+      const input = {
+        action: 'supply',
+        values: ['1', '2', '3'],
+        nested: { a: 1, b: 'x' },
+      };
+      const inputHash = await hashZkInputs(input);
+      const keyV1 = buildProofCacheKey('supply', 'v1', inputHash);
+      const keyV2 = buildProofCacheKey('supply', 'v2', inputHash);
+      expect(keyV1).to.not.equal(keyV2);
+
+      const record = {
+        proof: {
+          aX: [1],
+          aY: [2],
+          bX0: [3],
+          bX1: [4],
+          bY0: [5],
+          bY1: [6],
+          cX: [7],
+          cY: [8],
+        },
+        publicSignals: ['1', '2'],
+      };
+
+      await setCachedProof('supply', input, record);
+      const cached = await getCachedProof('supply', input);
+      expect(cached?.publicSignals).to.deep.equal(record.publicSignals);
     });
   });
 

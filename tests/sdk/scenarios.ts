@@ -379,13 +379,10 @@ export class ScenarioRunner {
       this.program.programId,
     );
 
-    const newNoteHash = Array.from(newCommitment);
-
     await this.program.methods
       .borrowSecure(
         new BN(amount.toString()),
         encryptedBalance,
-        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
@@ -405,6 +402,7 @@ export class ScenarioRunner {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
+      .preInstructions([anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 400000 })])
       .signers([wallet.keypair])
       .rpc();
 
@@ -477,13 +475,10 @@ export class ScenarioRunner {
       this.program.programId,
     );
 
-    const newNoteHash = Array.from(newCommitment);
-
     await this.program.methods
       .repaySecure(
         new BN(amount.toString()),
         encryptedBalance,
-        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
@@ -576,14 +571,10 @@ export class ScenarioRunner {
       this.program.programId,
     );
 
-    const newNoteHash = Array.from(newCommitment);
-    const receipt = await this.program.account.noteReceipt.fetch(noteReceipt);
-
     await this.program.methods
       .withdrawSecure(
         new BN(amount.toString()),
         encryptedBalance,
-        Array.from(wallet.noteHash),
         Array.from(wallet.commitment),
         Array.from(newCommitment),
         Array.from(bigintToBytesBE(oldNote.nullifier, 32)),
