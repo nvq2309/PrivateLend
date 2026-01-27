@@ -330,7 +330,6 @@ const App = () => {
   const {
     cluster,
     note,
-    myPosition,
     walletBalanceLamports,
     collateralBalanceLamports,
     borrowBalanceLamports,
@@ -393,6 +392,7 @@ const App = () => {
       }
     },
     [
+      e2eEnabled,
       activePosition,
       activeSymbol,
       borrowBalanceLamports,
@@ -400,7 +400,6 @@ const App = () => {
       collateralBalanceLamports,
       collateralDecimals,
       collateralMint,
-      myPosition,
       walletBalanceLamports,
     ],
   );
@@ -487,7 +486,11 @@ const App = () => {
 
     setActionBusy(true);
     setActionError(null);
-    setActionMessage(mode === 'SECURE' ? 'Submitting secure action...' : 'Submitting action...');
+    setActionMessage(
+      mode === 'SECURE'
+        ? 'Generating proof and submitting transaction...'
+        : 'Submitting action...'
+    );
     setProof(null);
     setPendingNote(null);
     setNoteSaved(false);
@@ -609,15 +612,16 @@ const App = () => {
       return;
     }
     const rawInput = importNoteHash.trim();
-    const hasPrefix = rawInput.startsWith(NOTE_STRING_PREFIX);
-    const looksLikeHash = isNoteHash(rawInput);
+    const normalizedInput = rawInput.replace(/\s+/g, '');
+    const hasPrefix = normalizedInput.startsWith(NOTE_STRING_PREFIX);
+    const looksLikeHash = isNoteHash(normalizedInput);
     if (!hasPrefix && !looksLikeHash) {
       showPageError('Invalid note string.');
       return;
     }
 
     if (looksLikeHash && !hasPrefix) {
-      const access = readNoteAccessRecord(rawInput);
+      const access = readNoteAccessRecord(normalizedInput);
       if (!access) {
         showPageError('Invalid note string.');
         return;
@@ -632,7 +636,7 @@ const App = () => {
 
     let payload: ReturnType<typeof decodeNoteString>;
     try {
-      payload = decodeNoteString(rawInput);
+      payload = decodeNoteString(normalizedInput);
     } catch (error) {
       console.error('Note string decode failed', error);
       showPageError('Invalid note string.');
@@ -641,7 +645,7 @@ const App = () => {
 
     const access = readNoteAccessRecord(payload.noteHash);
     if (access) {
-      applyNoteAccessRecord(access, rawInput);
+      applyNoteAccessRecord(access, normalizedInput);
       setImportNoteHash('');
       setImportLastTxnId('');
       showActionSuccess('Access restored.');
@@ -664,7 +668,7 @@ const App = () => {
 
     const ownerPubkey = publicKey?.toBytes() ?? new Uint8Array(32);
     const privacyNote = await buildPrivacyNoteFromNoteString({
-      noteString: rawInput,
+      noteString: normalizedInput,
       walletAddress,
       ownerPubkey,
       collateralSymbol: symbol,
@@ -679,7 +683,7 @@ const App = () => {
       version: 1,
       walletAddress,
       noteHash: payload.noteHash,
-      noteString: rawInput,
+          noteString: normalizedInput,
       lastTxnId,
       createdAt: Number(payload.timestamp),
       updatedAt: Date.now(),
@@ -897,7 +901,7 @@ const App = () => {
                       <div className="space-y-4">
                         <div className="w-20 h-20 mx-auto rounded-full bg-white/5 border border-white/10 flex items-center justify-center shadow-inner relative overflow-hidden">
                           <div className="absolute inset-0 bg-emerald-500/10 blur-xl animate-pulse" />
-                          <svg className="w-8 h-8 text-emerald-400 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="w-8 h-8 text-emerald-400 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                           </svg>
                         </div>
@@ -913,7 +917,7 @@ const App = () => {
                         <div className="p-6 rounded-2xl bg-black/20 border border-white/5 hover:border-white/10 transition-colors text-left space-y-4">
                           <div className="flex items-center gap-3 mb-2">
                             <div className="p-2 rounded-lg bg-white/5 text-slate-300">
-                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
                               </svg>
                             </div>
@@ -947,7 +951,7 @@ const App = () => {
                         <div className="p-6 rounded-2xl bg-emerald-900/10 border border-emerald-500/20 hover:border-emerald-500/30 transition-colors text-left space-y-4 relative overflow-hidden">
                           <div className="flex items-center gap-3 mb-2 relative z-10">
                             <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-300">
-                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                               </svg>
                             </div>
@@ -1010,7 +1014,7 @@ const App = () => {
                           onClick={clearAllNotes}
                           className="text-xs font-bold text-slate-400 hover:text-white flex items-center gap-2 transition-colors"
                         >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                           </svg>
                           Lock Vault
@@ -1045,7 +1049,7 @@ const App = () => {
                               onClick={() => openAction('SUPPLY', 'SOL')}
                               className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 text-slate-950 font-bold text-sm hover:bg-emerald-400 transition-all shadow-lg shadow-emerald-900/20 flex items-center justify-center gap-2"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                               </svg>
                               Deposit SOL
@@ -1087,7 +1091,7 @@ const App = () => {
                               onClick={() => openAction('BORROW', 'USDC')}
                               className="flex-1 py-3 px-4 rounded-xl bg-white/5 text-white font-bold text-sm hover:bg-white/10 transition-all border border-white/5 flex items-center justify-center gap-2"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                               </svg>
                               Borrow USDC
@@ -1131,7 +1135,7 @@ const App = () => {
             <section className="glass rounded-3xl p-5 border-cyan-500/30 bg-gradient-to-br from-cyan-500/[0.08] to-blue-500/[0.04]">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center">
-                  <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                   </svg>
                 </div>
@@ -1253,7 +1257,7 @@ const App = () => {
               className="text-emerald-200/70 hover:text-emerald-100"
             >
               <span className="sr-only">Dismiss</span>
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -1292,6 +1296,7 @@ const App = () => {
         <div
           className="fixed bottom-20 right-6 bg-emerald-500/10 border border-emerald-400/30 text-emerald-100 px-4 py-2 rounded-full text-xs"
           data-snapshot="dynamic"
+          aria-live="polite"
         >
           Note saved to storage & clipboard.
         </div>
