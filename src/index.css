@@ -16,7 +16,7 @@ body {
 
 @layer utilities {
   .glass {
-    @apply bg-slate-900/70 backdrop-blur-xl border border-white/15 shadow-2xl;
+    @apply bg-slate-900/70 backdrop-blur-xl border border-white/20 shadow-2xl;
   }
 
   .gradient-text {

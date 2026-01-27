@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import {
   PublicKey,
+  ComputeBudgetProgram,
   SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   SYSVAR_RENT_PUBKEY,
@@ -136,13 +137,12 @@ const groth16ProofLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'cY'),
 ], 'proof');
 
-const secureSpendLayout = borsh.struct([
+const secureSpendLayoutNoNoteHash = borsh.struct([
   borsh.u64('amount'),
   borsh.array(borsh.u8(), 32, 'encrypted_balance'),
   borsh.array(borsh.u8(), 32, 'current_commitment'),
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
-  borsh.array(borsh.u8(), 32, 'note_hash'),
   groth16ProofLayout,
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
@@ -154,7 +154,6 @@ const withdrawSecureLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'current_commitment'),
   borsh.array(borsh.u8(), 32, 'new_commitment'),
   borsh.array(borsh.u8(), 32, 'nullifier'),
-  borsh.array(borsh.u8(), 32, 'note_hash'),
   groth16ProofLayout,
   borsh.vec(borsh.array(borsh.u8(), 32), 'merkle_proof'),
   borsh.vec(borsh.u8(), 'merkle_path'),
@@ -193,18 +192,18 @@ const encodeInstruction = (name: string, args?: Record<string, any>) => {
       return Buffer.concat([getDiscriminator(name), data]);
     }
     case 'deposit_secure_spend': {
-      const data = Buffer.alloc(secureSpendLayout.span + 1024);
-      const encoded = secureSpendLayout.encode(args, data);
+      const data = Buffer.alloc(secureSpendLayoutNoNoteHash.span + 1024);
+      const encoded = secureSpendLayoutNoNoteHash.encode(args, data);
       return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
     }
     case 'borrow_secure': {
-      const data = Buffer.alloc(secureSpendLayout.span + 1024);
-      const encoded = secureSpendLayout.encode(args, data);
+      const data = Buffer.alloc(secureSpendLayoutNoNoteHash.span + 1024);
+      const encoded = secureSpendLayoutNoNoteHash.encode(args, data);
       return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
     }
     case 'repay_secure': {
-      const data = Buffer.alloc(secureSpendLayout.span + 1024);
-      const encoded = secureSpendLayout.encode(args, data);
+      const data = Buffer.alloc(secureSpendLayoutNoNoteHash.span + 1024);
+      const encoded = secureSpendLayoutNoNoteHash.encode(args, data);
       return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
     }
     case 'withdraw_secure': {
@@ -941,7 +940,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         }),
       });
 
-      const signature = await sendTransaction([ix], preInstructions);
+       const signature = await sendTransaction([ix], preInstructions);
 
       if (vaultAddress) {
         const noteIndex = getNextNoteIndex(publicKey.toBase58());
@@ -1039,7 +1038,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         }),
       });
 
-      const signature = await sendTransaction([ix], instructions);
+       const signature = await sendTransaction([ix], instructions);
 
       const unspentNotes = getUnspentNotes(publicKey.toBase58(), vaultAddress.toBase58());
       if (unspentNotes.length > 0) {
@@ -1177,7 +1176,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         }),
       });
 
-      const signature = await sendTransaction([ix], instructions);
+       const signature = await sendTransaction([ix], instructions);
       await refresh();
       return { signature };
     },
@@ -1295,7 +1294,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         }),
       });
 
-      const signature = await sendTransaction([ix], instructions);
+       const signature = await sendTransaction([ix], instructions);
       await refresh();
       return { signature };
     },
@@ -1429,9 +1428,7 @@ export const useVeilLend = (mint?: PublicKey) => {
               )[0], isSigner: false, isWritable: true },
             { pubkey: collateral, isSigner: false, isWritable: false },
             { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-            { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
             { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-            { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
           ],
           data: encodeInstruction('deposit_secure_spend', {
             amount: new BN(amount),
@@ -1439,7 +1436,6 @@ export const useVeilLend = (mint?: PublicKey) => {
             current_commitment: Array.from(fromHex(activeNote.commitment)),
             new_commitment: commitment,
             nullifier: Array.from(fromHex(activeNote.nullifier)),
-            note_hash: Array.from(noteHashBytes),
             proof: zkProofResult.proof,
             merkle_proof: proof.proof.map((node) => Array.from(node)),
             merkle_path: proof.path,
@@ -1473,7 +1469,12 @@ export const useVeilLend = (mint?: PublicKey) => {
         });
       }
 
-      const signature = await sendTransaction([ix], preInstructions);
+       const signature = await sendTransaction(
+         [ix],
+         hasExistingNote && activeNote
+           ? [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...preInstructions]
+           : preInstructions,
+       );
       if (hasExistingNote && activeNote) {
         markNoteSpent(walletAddress, activeNote.nullifier, signature);
       }
@@ -1653,14 +1654,16 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
-          note_hash: Array.from(noteHashBytes),
           proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
       });
 
-      const signature = await sendTransaction([ix], instructions);
+      const signature = await sendTransaction(
+        [ix],
+        [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...instructions],
+      );
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
@@ -1829,14 +1832,16 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
-          note_hash: Array.from(noteHashBytes),
           proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
       });
 
-      const signature = await sendTransaction([ix], instructions);
+      const signature = await sendTransaction(
+        [ix],
+        [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...instructions],
+      );
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
@@ -1973,14 +1978,16 @@ export const useVeilLend = (mint?: PublicKey) => {
           current_commitment: Array.from(fromHex(activeNote.commitment)),
           new_commitment: Array.from(fromHex(newNote.commitment)),
           nullifier: Array.from(fromHex(activeNote.nullifier)),
-          note_hash: Array.from(noteHashBytes),
           proof: zkProof,
           merkle_proof: proof.proof.map((node) => Array.from(node)),
           merkle_path: proof.path,
         }),
       });
 
-      const signature = await sendTransaction([ix], preInstructions);
+      const signature = await sendTransaction(
+        [ix],
+        [ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }), ...preInstructions],
+      );
       markNoteSpent(walletAddress, activeNote.nullifier, signature);
       savePrivacyNote(walletAddress, newNote);
       await refresh();
