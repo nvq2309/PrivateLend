@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
 use crate::arcium::is_zero_pubkey;
@@ -16,7 +15,6 @@ use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16P
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
     proof: Groth16Proof,
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
@@ -34,8 +32,9 @@ pub struct DepositSecureSpend<'info> {
 
     #[account(
         mut,
-        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_hash.as_ref()],
+        seeds = [NOTE_RECEIPT_SEED, vault.key().as_ref(), note_receipt.note_hash.as_ref()],
         bump = note_receipt.bump,
+        constraint = note_receipt.vault == vault.key(),
     )]
     pub note_receipt: Box<Account<'info, NoteReceipt>>,
 
@@ -46,8 +45,7 @@ pub struct DepositSecureSpend<'info> {
     pub receipt_mint: Box<Account<'info, Mint>>,
 
     #[account(
-        init_if_needed,
-        payer = user,
+        mut,
         associated_token::mint = receipt_mint,
         associated_token::authority = note_receipt,
     )]
@@ -84,9 +82,7 @@ pub struct DepositSecureSpend<'info> {
 
     pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 /// Secure deposit that spends an existing note and appends a new commitment.
@@ -97,7 +93,6 @@ pub fn deposit_secure_spend(
     current_commitment: [u8; 32],
     new_commitment: [u8; 32],
     nullifier: [u8; 32],
-    note_hash: [u8; 32],
     proof: Groth16Proof,
     merkle_proof: Vec<[u8; 32]>,
     merkle_path: Vec<u8>,
@@ -111,10 +106,6 @@ pub fn deposit_secure_spend(
     if is_zero_pubkey(&note_receipt.client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
     }
-    if note_receipt.note_hash != note_hash {
-        return err!(VeilLendError::InvalidNoteHash);
-    }
-
     let nullifier_hash = poseidon_nullifier_hash(&nullifier)?;
     let public_inputs = [
         ctx.accounts.merkle_tree.root,
