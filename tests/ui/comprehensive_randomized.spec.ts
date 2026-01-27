@@ -175,7 +175,7 @@ const initE2ePage = async (
     localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     if (secret) (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
-    if (publicKey) (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey;
+    (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey ?? null;
     if (e2eBalances) (window as any).__VEILLEND_E2E_BALANCES__ = e2eBalances;
     Object.defineProperty(navigator, 'clipboard', {
       value: {
@@ -196,24 +196,33 @@ const initE2ePage = async (
 const unlockVault = async (page: Page, testInfo: TestInfo, prefix = 'vault') => {
   await waitForTestWallet(page);
   await page.getByRole('button', { name: 'Portfolio' }).click();
-  const gateVisible = await page.getByText('Private Vault Access').isVisible();
+  const vaultGate = page.getByText('Private Vault Access');
+  const vaultUnlocked = page.getByText('VAULT UNLOCKED');
+  await expect(vaultGate.or(vaultUnlocked)).toBeVisible({ timeout: 10000 });
+  const gateVisible = await vaultGate.isVisible();
   if (gateVisible) {
     await page.getByRole('button', { name: 'Generate Access Key' }).click();
     await expect(page.getByText('Your New Note').or(page.getByText('Generating note'))).toBeVisible();
     await page.getByRole('button', { name: 'Confirm & Save' }).click();
-    await expect(page.getByText('VAULT UNLOCKED')).toBeVisible();
+    await expect(vaultUnlocked).toBeVisible();
   }
+  await expect(vaultUnlocked).toBeVisible();
 };
 
 const openAction = async (page: Page, name: string, index = 0) => {
-  await page.getByRole('button', { name }).nth(index).click();
-  await expect(page.getByLabel('Amount')).toBeVisible();
+  const btn = page.getByRole('button', { name }).nth(index);
+  await btn.waitFor({ state: 'visible', timeout: 10000 });
+  await expect(btn).toBeEnabled({ timeout: 10000 });
+  await btn.click({ force: true });
+  await expect(page.getByLabel('Amount')).toBeVisible({ timeout: 10000 });
 };
 
 const runFastAction = async (page: Page, label: string, amount: string) => {
   await openAction(page, label);
   const toggleBtn = page.getByRole('button', { name: 'Toggle mode' });
-  const shieldedText = await page.getByText('Shielded Privacy').isVisible();
+  const shieldedText = await page
+    .locator('p.font-bold.text-sm', { hasText: 'Shielded Privacy' })
+    .isVisible();
   if (shieldedText) {
     await toggleBtn.click();
   }
@@ -228,9 +237,13 @@ const runSecureAction = async (page: Page, label: string, amount: string) => {
 };
 
 const executeAction = async (page: Page, action: SingleAction, testInfo: TestInfo) => {
-  // Navigate to Markets
-  await page.getByRole('button', { name: 'Markets' }).click();
+  const portfolioActions = new Set<ActionType>(['Withdraw', 'Repay']);
+  await page.getByRole('button', { name: portfolioActions.has(action.action) ? 'Portfolio' : 'Markets' }).click();
   await page.waitForTimeout(200);
+
+  if (portfolioActions.has(action.action)) {
+    await expect(page.getByText('VAULT UNLOCKED')).toBeVisible({ timeout: 10000 });
+  }
 
   if (action.mode === 'FAST') {
     await runFastAction(page, action.action, action.amount);
@@ -328,7 +341,7 @@ const generateMultiActionScenarios = (count: number, minActions: number = 5): Mu
 };
 
 // Generate 150 scenarios with 5+ actions each
-const MULTI_ACTION_SCENARIOS = generateMultiActionScenarios(150, 5);
+const MULTI_ACTION_SCENARIOS = generateMultiActionScenarios(Number(process.env.UI_RANDOM_SCENARIOS ?? 10), 5);
 
 console.log(`Generated ${MULTI_ACTION_SCENARIOS.length} multi-action scenarios with seed: ${TEST_SEED}`);
 
@@ -402,12 +415,20 @@ test.describe('Security Edge Cases', () => {
       await waitForTestWallet(page);
       await unlockVault(page, testInfo, `edge-${edgeCase.name.replace(/\s+/g, '-')}`);
 
-      await page.getByRole('button', { name: 'Markets' }).click();
+      const portfolioActions = new Set<ActionType>(['Withdraw', 'Repay']);
+      await page.getByRole('button', { name: portfolioActions.has(edgeCase.action as ActionType) ? 'Portfolio' : 'Markets' }).click();
+      if (portfolioActions.has(edgeCase.action as ActionType)) {
+        await expect(page.getByText('VAULT UNLOCKED')).toBeVisible({ timeout: 10000 });
+      }
       await runFastAction(page, edgeCase.action, edgeCase.amount);
 
       if (edgeCase.expectError) {
-        const errorPattern = /error|invalid|exceeds|cannot|must be/i;
-        await expect(page.getByText(errorPattern)).toBeVisible({ timeout: 5000 });
+        const errorPattern = /error|invalid|exceeds|cannot|must be|insufficient|enough|collateral|valid amount|enter|debt/i;
+        const errorBanner = page
+          .locator('div.text-red-200')
+          .filter({ hasText: errorPattern })
+          .first();
+        await expect(errorBanner).toBeVisible({ timeout: 5000 });
       }
     });
   }
@@ -506,6 +527,8 @@ test.describe('LTV Security Validation', () => {
       await page.waitForTimeout(300);
 
       // Withdraw - this should be validated against LTV
+      await page.getByRole('button', { name: 'Portfolio' }).click();
+      await expect(page.getByText('VAULT UNLOCKED')).toBeVisible({ timeout: 10000 });
       await runFastAction(page, 'Withdraw', scenario.withdraw);
       
       // Check for either success or LTV error

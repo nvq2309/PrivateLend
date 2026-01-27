@@ -154,7 +154,7 @@ const initE2ePage = async (
     localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     if (secret) (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
-    if (publicKey) (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey;
+    (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey ?? null;
     if (e2eBalances) (window as any).__VEILLEND_E2E_BALANCES__ = e2eBalances;
     Object.defineProperty(navigator, 'clipboard', {
       value: {
@@ -192,7 +192,9 @@ const openAction = async (page: Page, name: string) => {
 const runFastAction = async (page: Page, label: string, amount: string) => {
   await openAction(page, label);
   const toggleBtn = page.getByRole('button', { name: 'Toggle mode' });
-  const shieldedText = await page.getByText('Shielded Privacy').isVisible();
+  const shieldedText = await page
+    .locator('p.font-bold.text-sm', { hasText: 'Shielded Privacy' })
+    .isVisible();
   if (shieldedText) {
     await toggleBtn.click();
   }

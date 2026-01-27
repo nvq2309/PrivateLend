@@ -134,9 +134,7 @@ const initE2ePage = async (
     if (secret) {
       (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
     }
-    if (publicKey) {
-      (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey;
-    }
+    (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey ?? null;
     if (e2eBalances) {
       (window as any).__VEILLEND_E2E_BALANCES__ = e2eBalances;
     }
@@ -245,7 +243,7 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     (window as any).__VEILLEND_E2E_BALANCES__ = undefined;
-    (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = undefined;
+    (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = null;
     (window as any).__VEILLEND_E2E_WALLET_SECRET__ = undefined;
     (window as any).__VEILLEND_E2E_USE_REAL_MAX__ = undefined;
     Object.defineProperty(navigator, 'clipboard', {
