@@ -46,7 +46,7 @@ export const buildZkInputs = async (params: {
   const deltaSupplyUsdc = params.collateralSymbol === 'USDC' ? params.deltaAmount : 0n;
   const deltaBorrowSol = params.collateralSymbol === 'USDC' ? params.deltaAmount : 0n;
   const deltaBorrowUsdc = params.collateralSymbol === 'SOL' ? params.deltaAmount : 0n;
-  const publicNullifierHash = await poseidonHash([oldFields.nullifier]);
+  const publicNullifierHash = await poseidonHash([oldFields.nullifier, 0n]);
 
   const baseInput = {
     merkleRoot: toFieldString(toField(params.merkleProof.root)),

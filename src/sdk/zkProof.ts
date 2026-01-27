@@ -1,4 +1,5 @@
 import { bigintToBytesBE } from './poseidon';
+import { getCachedProof, setCachedProof } from './proofCache';
 
 export interface Groth16Proof {
   aX: number[];
@@ -41,6 +42,10 @@ export const generateZkProof = async (
   action: ZkAction,
   input: Record<string, unknown>,
 ): Promise<ZkProofResult> => {
+  const cached = await getCachedProof(action, input);
+  if (cached) {
+    return cached;
+  }
   const { wasm, zkey } = getArtifactPaths(action);
   const snarkjs = await import('snarkjs');
   const { groth16 } = snarkjs;
@@ -51,8 +56,10 @@ export const generateZkProof = async (
   }
 
   const proofData = await groth16.fullProve(input, wasm, zkey);
-  return {
+  const result = {
     proof: toGroth16Proof(proofData.proof),
     publicSignals: proofData.publicSignals,
   };
+  await setCachedProof(action, input, result);
+  return result;
 };
