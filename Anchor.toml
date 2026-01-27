@@ -16,4 +16,4 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
-test = "npx ts-mocha -p ./tsconfig.tests.json -t 1000000 \"tests/**/*.ts\" --exclude \"tests/ui/**\""
+test = "bash tests/anchor-test.sh"

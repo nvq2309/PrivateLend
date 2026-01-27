@@ -32,6 +32,60 @@
   resolved "https://registry.npmjs.org/@babel/runtime/-/runtime-7.28.6.tgz"
   integrity sha512-05WQkdpL9COIMz4LjTxGpPNCdlpyimKppYNoJ5Di5EUObifl8t4tuLuUBBZEpoLYOmfvIWrsp9fCl0HoPRVTdA==
 
+"@biomejs/biome@^2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/biome/-/biome-2.3.12.tgz#7cf21b69734ac6a310bcd014d3a0b3b1dc5a1758"
+  integrity sha512-AR7h4aSlAvXj7TAajW/V12BOw2EiS0AqZWV5dGozf4nlLoUF/ifvD0+YgKSskT0ylA6dY1A8AwgP8kZ6yaCQnA==
+  optionalDependencies:
+    "@biomejs/cli-darwin-arm64" "2.3.12"
+    "@biomejs/cli-darwin-x64" "2.3.12"
+    "@biomejs/cli-linux-arm64" "2.3.12"
+    "@biomejs/cli-linux-arm64-musl" "2.3.12"
+    "@biomejs/cli-linux-x64" "2.3.12"
+    "@biomejs/cli-linux-x64-musl" "2.3.12"
+    "@biomejs/cli-win32-arm64" "2.3.12"
+    "@biomejs/cli-win32-x64" "2.3.12"
+
+"@biomejs/cli-darwin-arm64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-darwin-arm64/-/cli-darwin-arm64-2.3.12.tgz#ff0029420b0fc307ad0345a4190fe14ca4fd2676"
+  integrity sha512-cO6fn+KiMBemva6EARDLQBxeyvLzgidaFRJi8G7OeRqz54kWK0E+uSjgFaiHlc3DZYoa0+1UFE8mDxozpc9ieg==
+
+"@biomejs/cli-darwin-x64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-darwin-x64/-/cli-darwin-x64-2.3.12.tgz#5afba38de8b6fc44cfa16cf45b816deead8cab25"
+  integrity sha512-/fiF/qmudKwSdvmSrSe/gOTkW77mHHkH8Iy7YC2rmpLuk27kbaUOPa7kPiH5l+3lJzTUfU/t6x1OuIq/7SGtxg==
+
+"@biomejs/cli-linux-arm64-musl@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-linux-arm64-musl/-/cli-linux-arm64-musl-2.3.12.tgz#fe98eaca6b3a8b4da1581330a341a9ecb5f49525"
+  integrity sha512-aqkeSf7IH+wkzFpKeDVPSXy9uDjxtLpYA6yzkYsY+tVjwFFirSuajHDI3ul8en90XNs1NA0n8kgBrjwRi5JeyA==
+
+"@biomejs/cli-linux-arm64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-linux-arm64/-/cli-linux-arm64-2.3.12.tgz#b3a404700075aab96b7418b0c00e40a35de104fd"
+  integrity sha512-nbOsuQROa3DLla5vvsTZg+T5WVPGi9/vYxETm9BOuLHBJN3oWQIg3MIkE2OfL18df1ZtNkqXkH6Yg9mdTPem7A==
+
+"@biomejs/cli-linux-x64-musl@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-linux-x64-musl/-/cli-linux-x64-musl-2.3.12.tgz#beb065ec9802ddcb00e6bb4398be3f06abd309b2"
+  integrity sha512-kVGWtupRRsOjvw47YFkk5mLiAdpCPMWBo1jOwAzh+juDpUb2sWarIp+iq+CPL1Wt0LLZnYtP7hH5kD6fskcxmg==
+
+"@biomejs/cli-linux-x64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-linux-x64/-/cli-linux-x64-2.3.12.tgz#6cfbc5536e1184966704a0f50385b9121ff473a5"
+  integrity sha512-CQtqrJ+qEEI8tgRSTjjzk6wJAwfH3wQlkIGsM5dlecfRZaoT+XCms/mf7G4kWNexrke6mnkRzNy6w8ebV177ow==
+
+"@biomejs/cli-win32-arm64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-win32-arm64/-/cli-win32-arm64-2.3.12.tgz#ac40d7792708e224c0d5fa5ce1a4beb9e3255bfa"
+  integrity sha512-Re4I7UnOoyE4kHMqpgtG6UvSBGBbbtvsOvBROgCCoH7EgANN6plSQhvo2W7OCITvTp7gD6oZOyZy72lUdXjqZg==
+
+"@biomejs/cli-win32-x64@2.3.12":
+  version "2.3.12"
+  resolved "https://registry.yarnpkg.com/@biomejs/cli-win32-x64/-/cli-win32-x64-2.3.12.tgz#5c710c971f3adc6971e04feb342a70387a6a2d58"
+  integrity sha512-qqGVWqNNek0KikwPZlOIoxtXgsNGsX+rgdEzgw82Re8nF02W+E2WokaQhpF5TdBh/D/RQ3TLppH+otp6ztN0lw==
+
 "@coral-xyz/anchor-errors@^0.31.1":
   version "0.31.1"
   resolved "https://registry.yarnpkg.com/@coral-xyz/anchor-errors/-/anchor-errors-0.31.1.tgz#d635cbac2533973ae6bfb5d3ba1de89ce5aece2d"
@@ -7028,17 +7082,9 @@ source-map-js@^1.0.2:
   resolved "https://registry.npmjs.org/source-map-js/-/source-map-js-1.0.2.tgz"
   integrity sha512-R0XvVJ9WusLiqTCEiGCmICCMplcCkIwwR11mOSD9CR5u+IXYdiseeEuXCVAjS54zqwkLcPNnmU4OeJ6tUrWhDw==
 
-source-map-support@^0.5.21:
+source-map-support@^0.5.21, source-map-support@^0.5.6:
   version "0.5.21"
   resolved "https://registry.yarnpkg.com/source-map-support/-/source-map-support-0.5.21.tgz#04fe7c7f9e1ed2d662233c28cb2b35b9f63f6e4f"
-  integrity sha512-uBHU3L3czsIyYXKX88fdrGovxdSCoTGDRZ6SYXtSRxLZUzHg5P/66Ht6uoUlHu9EZod+inXhKo3qQgwXUT/y1w==
-  dependencies:
-    buffer-from "^1.0.0"
-    source-map "^0.6.0"
-
-source-map-support@^0.5.6:
-  version "0.5.21"
-  resolved "https://registry.npmjs.org/source-map-support/-/source-map-support-0.5.21.tgz"
   integrity sha512-uBHU3L3czsIyYXKX88fdrGovxdSCoTGDRZ6SYXtSRxLZUzHg5P/66Ht6uoUlHu9EZod+inXhKo3qQgwXUT/y1w==
   dependencies:
     buffer-from "^1.0.0"
