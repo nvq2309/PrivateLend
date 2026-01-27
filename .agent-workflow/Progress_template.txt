@@ -1,0 +1,26 @@
+# Progress Log (Template)
+
+## Session: <Title>
+**Date:** <YYYY-MM-DD>
+**Agent:** <Agent Name>
+
+### Goals
+- <Goal 1>
+- <Goal 2>
+
+### Log
+- [ ] <Action 1>
+- [ ] <Action 2>
+  - Outcome: <pass/fail>
+  - Notes: <observations>
+
+### Preflight (Zero-Interruption)
+- Files read:
+- Files edited:
+- Tools/permissions checked:
+
+### Results
+- Commands run: `<command>`
+- Pass/fail counts: <X> passing, <Y> failing.
+- Issues resolved: <list>
+- Confirmation: <statement>

@@ -1,0 +1,274 @@
+{
+  "meta": {
+    "project": "VeilLend",
+    "last_updated": "2026-01-27",
+    "purpose": "Task dependency graph for multi-agent execution with collision avoidance"
+  },
+  "rules": {
+    "max_concurrent_tasks": 3,
+    "locking": "Only one task may be 'working_on' at a time. working_on implies file lock.",
+    "allowed_paths_required": true,
+    "evidence_required": true
+  },
+  "tasks": [
+    {
+      "id": "WG-001",
+      "title": "Harness preflight: validator lifecycle + deterministic bootstrap",
+      "owner_agent": "tester",
+      "status": "completed",
+      "depends_on": [],
+      "allowed_paths": [
+        "scripts/",
+        ".agent-workflow/Test_Plan.md",
+        ".agent-workflow/progress/Progress.txt",
+        "README.md"
+      ],
+      "verify_cmds": [
+        "pkill -f solana-test-validator || true",
+        "./scripts/start-validator.sh",
+        "./scripts/bootstrap-localnet.sh"
+      ],
+      "outputs": [
+        "Documented preflight in Test_Plan.md",
+        "progress/Progress.txt evidence of successful bootstrap"
+      ]
+    },
+    {
+      "id": "WG-002",
+      "title": "Fix/standardize test runner invocation (grep passthrough, deps present)",
+      "owner_agent": "tester",
+      "status": "completed",
+      "depends_on": [
+        "WG-001"
+      ],
+      "allowed_paths": [
+        "Anchor.toml",
+        "package.json",
+        "yarn.lock",
+        "tests/",
+        ".agent-workflow/PRD.json",
+        ".agent-workflow/Test_Plan.md",
+        ".agent-workflow/progress/Progress.txt"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"Withdraw with LTV\"",
+        "anchor test --skip-local-validator -- --grep \"Repay All\""
+      ],
+      "outputs": [
+        "Grep filtering works",
+        "No missing ts-mocha / source-map-support errors"
+      ]
+    },
+    {
+      "id": "WG-010",
+      "title": "Implement note string encode/decode contract (veil-note-v1)",
+      "owner_agent": "implementer_backend",
+      "status": "completed",
+      "depends_on": [
+        "WG-002"
+      ],
+      "allowed_paths": [
+        "src/sdk/",
+        "src/lib/",
+        "tests/",
+        ".agent-workflow/PRD.md",
+        ".agent-workflow/PRD.json"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"Note string\""
+      ],
+      "outputs": [
+        "Note string spec in PRD.md",
+        "Unit tests for roundtrip + invalid inputs"
+      ]
+    },
+    {
+      "id": "WG-011",
+      "title": "Commitment alignment test (client \u2194 circuit \u2194 on-chain assumptions)",
+      "owner_agent": "tester",
+      "status": "completed",
+      "depends_on": [
+        "WG-010"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "src/sdk/",
+        "circuits/veillend/",
+        "programs/veillend/",
+        ".agent-workflow/ADR/ADR-0001-hash-function.md"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"Commitment alignment\""
+      ],
+      "outputs": [
+        "Alignment test exists and passes for chosen hash function"
+      ]
+    },
+    {
+      "id": "WG-020",
+      "title": "Proof generation pipeline (local/dev): witness \u2192 proof",
+      "owner_agent": "implementer_backend",
+      "status": "completed",
+      "depends_on": [
+        "WG-011"
+      ],
+      "allowed_paths": [
+        "src/sdk/",
+        "circuits/veillend/",
+        "scripts/",
+        "tests/"
+      ],
+      "verify_cmds": [
+        "TEST_GREP=\"Proof generation\" COPYFILE_DISABLE=1 anchor test --skip-local-validator"
+      ],
+      "outputs": [
+        "Proof generation works in dev environment",
+        "Failures are explicit and actionable"
+      ]
+    },
+    {
+      "id": "WG-021",
+      "title": "Proof cache and artifact versioning",
+      "owner_agent": "implementer_backend",
+      "status": "completed",
+      "depends_on": [
+        "WG-020"
+      ],
+      "allowed_paths": [
+        "src/sdk/",
+        "src/lib/",
+        "tests/",
+        "public/zk/"
+      ],
+      "verify_cmds": [
+        "TEST_GREP=\"Proof cache\" COPYFILE_DISABLE=1 anchor test --skip-local-validator"
+      ],
+      "outputs": [
+        "Cache keyed by inputs hash",
+        "Cache invalidation on artifact change"
+      ]
+    },
+    {
+      "id": "WG-030",
+      "title": "On-chain verification for secure_supply (narrow slice)",
+      "owner_agent": "implementer_backend",
+      "status": "completed",
+      "depends_on": [
+        "WG-020"
+      ],
+      "allowed_paths": [
+        "programs/veillend/",
+        "tests/",
+        "src/sdk/"
+      ],
+      "verify_cmds": [
+        "TEST_GREP=\"SECURE supply\" COPYFILE_DISABLE=1 anchor test --skip-local-validator"
+      ],
+      "outputs": [
+        "Real proof verified on-chain for secure_supply"
+      ]
+    },
+    {
+      "id": "WG-031",
+      "title": "Compute + tx-size budget hygiene for SECURE instructions",
+      "owner_agent": "integrator",
+      "status": "completed",
+      "depends_on": [
+        "WG-030"
+      ],
+      "allowed_paths": [
+        "src/sdk/",
+        "tests/",
+        "programs/veillend/"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"SECURE supply\""
+      ],
+      "outputs": [
+        "Compute budget set for verifier tx",
+        "No tx-too-large errors in secure path"
+      ]
+    },
+    {
+      "id": "WG-040",
+      "title": "Full SECURE loop: borrow/repay/withdraw with note-in/note-out",
+      "owner_agent": "integrator",
+      "status": "completed",
+      "depends_on": [
+        "WG-031"
+      ],
+      "allowed_paths": [
+        "programs/veillend/",
+        "src/",
+        "tests/"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"SECURE end-to-end\""
+      ],
+      "outputs": [
+        "End-to-end SECURE loop works on localnet"
+      ]
+    },
+    {
+      "id": "WG-041",
+      "title": "Parity tests: FAST vs SECURE invariants",
+      "owner_agent": "tester",
+      "status": "completed",
+      "depends_on": [
+        "WG-040"
+      ],
+      "allowed_paths": [
+        "tests/",
+        ".agent-workflow/test-parity.md"
+      ],
+      "verify_cmds": [
+        "anchor test --skip-local-validator -- --grep \"Parity\""
+      ],
+      "outputs": [
+        "Parity suite exists and passes"
+      ]
+    },
+    {
+      "id": "WG-042",
+      "title": "UI smoke/E2E tests for critical secure paths",
+      "owner_agent": "frontend",
+      "status": "planned",
+      "depends_on": [
+        "WG-040"
+      ],
+      "allowed_paths": [
+        "src/",
+        "tests/ui/",
+        ".agent-workflow/Test_Plan.md"
+      ],
+      "verify_cmds": [
+        "npx playwright test"
+      ],
+      "outputs": [
+        "Playwright smoke coverage for secure flow"
+      ]
+    },
+    {
+      "id": "WG-050",
+      "title": "Docs + demo runbook (localnet and devnet)",
+      "owner_agent": "docs",
+      "status": "planned",
+      "depends_on": [
+        "WG-041",
+        "WG-042"
+      ],
+      "allowed_paths": [
+        "README.md",
+        "RUNBOOK.md",
+        ".agent-workflow/"
+      ],
+      "verify_cmds": [
+        "cat RUNBOOK.md"
+      ],
+      "outputs": [
+        "Runnable demo instructions"
+      ]
+    }
+  ],
+  "legacy_nodes": []
+}

@@ -1,0 +1,72 @@
+{
+  "project": {
+    "name": "Example Project",
+    "version": "0.1.0",
+    "goals": [],
+    "non_goals": [],
+    "constraints": [],
+    "dependencies": [],
+    "workflow_preset": "<preset-name>"
+  },
+  "milestones": [
+    {
+      "id": "M0",
+      "name": "Vertical slice demo",
+      "goal": "Smallest end-to-end outcome that proves the concept.",
+      "status": "planned"
+    }
+  ],
+  "slices": [
+    {
+      "id": "S01",
+      "name": "First vertical slice",
+      "goal": "Deliver a thin end-to-end path.",
+      "out_of_scope": [],
+      "acceptance_test_ids": [],
+      "verification_commands": [],
+      "status": "planned"
+    }
+  ],
+  "todo": [
+    {
+      "id": "T01",
+      "title": "",
+      "details": "",
+      "owner": "agent",
+      "depends_on": [],
+      "status": "todo"
+    }
+  ],
+  "acceptance_tests": [
+    {
+      "id": "AT01",
+      "category": "functional",
+      "description": "Example acceptance test",
+      "steps": [
+        "Given ...",
+        "When ...",
+        "Then ..."
+      ],
+      "passes": false,
+      "evidence": ""
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "A01",
+      "statement": "Example assumption",
+      "impact_if_wrong": "High",
+      "verification": "Run ...",
+      "status": "unverified"
+    }
+  ],
+  "agent_guidance": {
+    "zero_interruption": true,
+    "clarification_gate_required": true,
+    "default_task_size_minutes": [
+      30,
+      90
+    ],
+    "controlled_concurrency": 3
+  }
+}

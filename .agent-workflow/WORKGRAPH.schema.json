@@ -1,0 +1,11 @@
+{
+  "tasks": [
+    {
+      "id": "string",
+      "owner": "agent",
+      "status": "todo|working|blocked|done",
+      "depends_on": ["task_id"],
+      "allowed_paths": ["path/**"]
+    }
+  ]
+}

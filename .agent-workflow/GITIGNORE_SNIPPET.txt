@@ -1,0 +1,16 @@
+# Add these lines to your repo .gitignore
+
+# Claude Code personal memory
+CLAUDE.local.md
+
+# Operator personalization (this workflow)
+.agent-workflow/Conversation_Policy.local.md
+
+# Optional per-user profiles
+.agent-workflow/Operator_Profile.local.md
+
+# Generated visualizations
+.agent-workflow/WorkGraph_visualize.md
+
+# Per-task progress logs (keep or ignore depending on preference)
+.agent-workflow/progress/*.md

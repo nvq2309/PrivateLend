@@ -1,0 +1,267 @@
+{
+  "meta": {
+    "project": "VeilLend",
+    "phase": "ZK rewrite",
+    "last_updated": "2026-01-27",
+    "owner": "Cherry",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "operator_preferences": {
+    "audience": {
+      "ccu_max": 100,
+      "stage": "early demo"
+    },
+    "cadence": {
+      "daily": "integrate + keep main green",
+      "weekly": "demo/release milestone"
+    },
+    "parallelism": {
+      "max_concurrent_agents": 3,
+      "fully_async": false
+    },
+    "autonomy": {
+      "default": "agent proceeds after clarify gate",
+      "requires_operator_gate": [
+        "smart contract semantics changes",
+        "ZK verifier design changes",
+        "breaking interface changes",
+        "hash function / proof system decisions"
+      ]
+    },
+    "cost_quality_ratio": {
+      "cost": 0.6,
+      "quality": 0.4
+    }
+  },
+  "agent_guidance": {
+    "zero_interruption": true,
+    "clarification_gate_required": true,
+    "default_task_size_minutes": [
+      30,
+      90
+    ],
+    "controlled_concurrency": 3
+  },
+  "project": {
+    "one_liner": "Privacy-first lending broker on Solana with secure note-based flows.",
+    "p0_goals": [
+      "End-to-end SECURE flow on localnet: secure supply \u2192 borrow \u2192 repay \u2192 withdraw, producing updated note strings",
+      "On-chain verification of ZK proofs (not demo-only) for SECURE instructions",
+      "LTV (70%) enforced on-chain with boundary tests and deterministic reproduction",
+      "Deterministic harness + reproducible tests (seeded)"
+    ],
+    "non_goals": [
+      "Interest accrual",
+      "Liquidations",
+      "Multi-asset collateral/oracles",
+      "Production custody UX"
+    ],
+    "constraints": [
+      "LTV fixed at 70% for initial implementation",
+      "Evidence gate: acceptance tests may only be marked passing with evidence in progress/Progress.txt",
+      "Controlled parallelism with allowed_paths per task"
+    ],
+    "workflow_preset": "backend-dev"
+  },
+  "decisions_needed": [
+    {
+      "id": "D1",
+      "title": "Hash function alignment for Merkle commitments",
+      "question": "Should the SECURE flow use Poseidon or SHA-256 for commitments and Merkle hashing across circuits + on-chain program?",
+      "options": {
+        "A": "Poseidon everywhere (circuits + on-chain), update on-chain hashing accordingly",
+        "B": "SHA-256 everywhere, update circuits to SHA-256 Merkle",
+        "C": "Hybrid (Poseidon in circuit, SHA-256 on-chain) \u2014 NOT recommended due to mismatch risk"
+      },
+      "recommended": "A",
+      "selected": "A",
+      "status": "accepted"
+    },
+    {
+      "id": "D2",
+      "title": "Proof system + verifier interface",
+      "question": "Which proof system/verifier shape do we standardize on for SECURE instructions?",
+      "options": {
+        "A": "Groth16 (snarkjs) with on-chain verifier + strict artifact versioning",
+        "B": "Plonk / other (only if existing infra already chosen)",
+        "C": "Temporary stub verifier for UI-only demo (explicitly non-secure)"
+      },
+      "recommended": "A",
+      "selected": "A",
+      "status": "accepted"
+    },
+    {
+      "id": "D3",
+      "title": "Note string schema (versioning + minimal fields)",
+      "question": "What fields are required in the note string, and how do we guarantee forward-compatibility?",
+      "options": {
+        "A": "veil-note-v1 with explicit payload fields + checksum; version bump on any change",
+        "B": "JSON note (easier debug, larger, more leak-prone)",
+        "C": "Binary-only note (compact, harder to debug)"
+      },
+      "recommended": "A",
+      "selected": "A",
+      "status": "accepted"
+    }
+  ],
+  "slices": [
+    {
+      "id": "S1",
+      "title": "Harness hardening + Clarify Gate enforcement",
+      "goal": "Stop failing for harness reasons; make failures actionable.",
+      "status": "planned",
+      "acceptance_tests": [
+        "AT-HARNESS-001",
+        "AT-HARNESS-002",
+        "AT-HARNESS-003"
+      ],
+      "workgraph_tasks": [
+        "WG-001",
+        "WG-002"
+      ]
+    },
+    {
+      "id": "S2",
+      "title": "Note string encode/decode + deterministic commitment functions",
+      "goal": "Make note contract explicit and stable before proof wiring.",
+      "status": "planned",
+      "acceptance_tests": [
+        "AT-NOTE-001",
+        "AT-NOTE-002"
+      ],
+      "workgraph_tasks": [
+        "WG-010",
+        "WG-011"
+      ]
+    },
+    {
+      "id": "S3",
+      "title": "Proof generation pipeline + artifact handling",
+      "goal": "Generate proofs deterministically in dev environment; cache by inputs.",
+      "status": "planned",
+      "acceptance_tests": [
+        "AT-PROOF-001",
+        "AT-PROOF-002"
+      ],
+      "workgraph_tasks": [
+        "WG-020",
+        "WG-021"
+      ]
+    },
+    {
+      "id": "S4",
+      "title": "On-chain verification for ONE SECURE instruction",
+      "goal": "Verify proofs on-chain for secure supply (narrow slice).",
+      "status": "planned",
+      "acceptance_tests": [
+        "AT-SECURE-001"
+      ],
+      "workgraph_tasks": [
+        "WG-030",
+        "WG-031"
+      ]
+    },
+    {
+      "id": "S5",
+      "title": "Full SECURE loop + parity tests",
+      "goal": "Secure supply/borrow/repay/withdraw + parity checks vs FAST.",
+      "status": "planned",
+      "acceptance_tests": [
+        "AT-SECURE-002",
+        "AT-PARITY-001"
+      ],
+      "workgraph_tasks": [
+        "WG-040",
+        "WG-041",
+        "WG-042"
+      ]
+    }
+  ],
+  "acceptance_tests": [
+    {
+      "id": "AT-HARNESS-001",
+      "priority": "P0",
+      "description": "Local validator + bootstrap can run deterministically and tests connect to RPC (no ECONNREFUSED).",
+      "verify_cmd": "pkill -f solana-test-validator || true && pkill -f solana-faucet || true && COPYFILE_DISABLE=1 ./scripts/start-validator.sh && COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh",
+      "passes": true,
+      "evidence": "2026-01-26: pkill -f solana-test-validator || true && pkill -f solana-faucet || true && COPYFILE_DISABLE=1 ./scripts/start-validator.sh && COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh; first run failed (faucet port in use), second run succeeded."
+    },
+    {
+      "id": "AT-HARNESS-002",
+      "priority": "P0",
+      "description": "Anchor test filtering works (grep passed to mocha, not cargo-build-sbf).",
+      "verify_cmd": "TEST_GREP=\"Withdraw with LTV\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"Withdraw with LTV\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (6 passing)."
+    },
+    {
+      "id": "AT-HARNESS-003",
+      "priority": "P0",
+      "description": "Test runner dependencies are installed (ts-mocha available) and tests start.",
+      "verify_cmd": "npm install && anchor test --skip-local-validator -- --grep \"Withdraw with LTV\"",
+      "passes": false,
+      "evidence": ""
+    },
+    {
+      "id": "AT-NOTE-001",
+      "priority": "P0",
+      "description": "Note string encode/decode round-trip is deterministic and versioned.",
+      "verify_cmd": "TEST_GREP=\"Note string\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"Note string\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing)."
+    },
+    {
+      "id": "AT-NOTE-002",
+      "priority": "P0",
+      "description": "Client note commitment matches circuit and on-chain hashing assumptions (alignment test).",
+      "verify_cmd": "TEST_GREP=\"Commitment alignment\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"Commitment alignment\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing)."
+    },
+    {
+      "id": "AT-PROOF-001",
+      "priority": "P0",
+      "description": "Proof generation works locally for at least one SECURE witness with deterministic output (or deterministic success).",
+      "verify_cmd": "TEST_GREP=\"Proof generation\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"Proof generation\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing)."
+    },
+    {
+      "id": "AT-PROOF-002",
+      "priority": "P1",
+      "description": "Proof cache keyed by (circuit_id, inputs_hash) avoids regeneration; cache invalidation on artifact version change.",
+      "verify_cmd": "TEST_GREP=\"Proof cache\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"Proof cache\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing)."
+    },
+    {
+      "id": "AT-SECURE-001",
+      "priority": "P0",
+      "description": "secure_supply verifies a real ZK proof on-chain and produces a valid next note.",
+      "verify_cmd": "TEST_GREP=\"SECURE supply\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-26: TEST_GREP=\"SECURE supply\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing)."
+    },
+    {
+      "id": "AT-SECURE-002",
+      "priority": "P0",
+      "description": "End-to-end SECURE loop: supply \u2192 borrow \u2192 repay \u2192 withdraw (note-in/note-out) on localnet.",
+      "verify_cmd": "TEST_GREP=\"SECURE end-to-end\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-27: TEST_GREP=\"SECURE end-to-end\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing). Tool timed out after output; no failure shown."
+    },
+    {
+      "id": "AT-PARITY-001",
+      "priority": "P1",
+      "description": "Parity: given the same action sequence, FAST and SECURE end states agree on observable invariants (e.g., LTV maintained, balances consistent).",
+      "verify_cmd": "TEST_GREP=\"Parity\" COPYFILE_DISABLE=1 anchor test --skip-local-validator",
+      "passes": true,
+      "evidence": "2026-01-27: TEST_GREP=\"Parity\" COPYFILE_DISABLE=1 anchor test --skip-local-validator (1 passing). Tool timed out after output; no failure shown."
+    }
+  ],
+  "assumptions": [
+    "The repo keeps FAST mode for baseline debugging; SECURE mode is the target.",
+    "Proof generation is intended to run in-browser or locally for dev; production proving infrastructure is out-of-scope for this phase.",
+    "Compute budget constraints will require explicit handling for SECURE instructions."
+  ]
+}
