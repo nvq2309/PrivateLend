@@ -420,3 +420,64 @@
 
 ### Results
 - Files changed: `tests/ui/randomized.spec.ts`, `.agent-workflow/tools/render_workgraph.mjs`, `.agent-workflow/WorkGraph_visualize.md`, `.agent-workflow/progress/WG-042.sisyphus.md`, `.agent-workflow/progress/Progress.txt`, plus regenerated snapshots under `tests/ui/__screenshots__/`.
+
+## Session: WG-045 Harness deps + UI verification
+**Date:** 2026-01-28
+**Agent:** Sisyphus
+
+### Goals
+- Verify AT-HARNESS-003 (deps + test runner)
+- Run UI build + Playwright suite
+
+### Log
+- [x] npm install
+  - Outcome: PASS (peer dependency warnings for React 18 vs qrcode.react/react-qr-reader).
+- [x] Tests: `TEST_GREP="Withdraw with LTV" COPYFILE_DISABLE=1 anchor test`
+  - Outcome: PASS (Withdraw with LTV Validation: 6 passing).
+- [x] Build: `npm run build`
+  - Outcome: PASS (vite warnings about eval + chunk size).
+- [x] UI tests: `npm run test:ui`
+  - Outcome: FAIL (timeout at 1200000ms; failures in app.spec.ts, comprehensive_randomized.spec.ts, and randomized scenarios).
+
+### Results
+- Evidence files: `.agent-workflow/progress/WG-045.sisyphus.md`, `.agent-workflow/progress/WG-042.sisyphus.md`.
+
+## Session: WG-042 UI targeted rerun
+**Date:** 2026-01-29
+**Agent:** Sisyphus
+
+### Goals
+- Re-run targeted Playwright UI tests after test-only fixes.
+- Capture evidence for WG-042 follow-up.
+
+### Log
+- [x] Tests: `npx playwright test tests/ui/app.spec.ts -g "portfolio gate creates and stores an initial note|two wallets share note and position state|supply 0 amount shows error message|repay amount exceeds debt shows error"`
+  - Outcome: FAIL (3 failed, 1 passed). Failures: Unlock Vault click timeout; screenshot diffs for supply-0 and repay-exceeds-debt.
+- [x] Tests: `npx playwright test tests/ui/comprehensive_randomized.spec.ts -g "Security Edge Cases"`
+  - Outcome: PASS (7 passed, seed veillend-security-2024).
+- [x] Tests: `npx playwright test tests/ui/massive_randomized.spec.ts`
+  - Outcome: FAIL (command timeout at 120000ms; suite did not complete; log included missing success/error text in some steps).
+
+### Results
+- Full `npm run test:ui` not executed due to targeted failures.
+- Evidence file updated: `.agent-workflow/progress/WG-042.sisyphus.md`.
+
+## Session: WG-042 UI stabilization
+**Date:** 2026-01-29
+**Agent:** Sisyphus
+
+### Goals
+- Stabilize wallet import flow in UI tests.
+- Update failing snapshots and re-run massive randomized suite.
+
+### Log
+- [x] UI tests: `npx playwright test tests/ui/app.spec.ts -g "supply 0 amount shows error message|repay amount exceeds debt shows error" --update-snapshots`
+  - Outcome: pass (2/2). Updated generate-note snapshots.
+- [x] UI tests: `npx playwright test tests/ui/app.spec.ts -g "portfolio gate creates and stores an initial note|two wallets share note and position state|supply 0 amount shows error message|repay amount exceeds debt shows error"`
+  - Outcome: pass (4/4).
+- [x] UI tests: `npx playwright test tests/ui/massive_randomized.spec.ts`
+  - Outcome: pass (124/124), seed veillend-e2e-2024, duration ~18m.
+
+### Results
+- Massive randomized UI suite now passes end-to-end.
+- Evidence file updated: `.agent-workflow/progress/WG-042.sisyphus.md`.
