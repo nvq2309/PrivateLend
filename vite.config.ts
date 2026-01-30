@@ -23,5 +23,10 @@ export default defineConfig({
     rollupOptions: {
       external: ['fs', 'path', 'fs/promises'],
     },
+    minify: 'esbuild',
+  },
+  esbuild: {
+    // Preserve console statements for debugging
+    drop: [],
   },
 })
