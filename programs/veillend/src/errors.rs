@@ -62,6 +62,8 @@ pub enum VeilLendError {
     ArciumClientKeyMismatch,
     #[msg("Invalid note access hash")]
     InvalidNoteHash,
+    #[msg("No fast position available to shield")]
+    NoFastPosition,
     #[msg("ZK proof verification failed")]
     ZkProofInvalid,
     #[msg("Invalid ZK proof inputs")]

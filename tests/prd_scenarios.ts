@@ -47,6 +47,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
   let vault: PublicKey;
   let protectionPool: PublicKey;
   let vaultCollateralAccount: PublicKey;
+  let merkleTree: PublicKey;
   let protectionReserveAccount: PublicKey;
   let receiptMint: PublicKey;
   let borrowMint: PublicKey;
@@ -83,6 +84,10 @@ describe("VeilLend PRD Acceptance Tests", () => {
     // 3. Derive PDAs
     [vault] = PublicKey.findProgramAddressSync(
       [Buffer.from("vault"), collateralMint.toBuffer()],
+      program.programId
+    );
+    [merkleTree] = PublicKey.findProgramAddressSync(
+      [Buffer.from("merkle_tree"), vault.toBuffer()],
       program.programId
     );
     [protectionPool] = PublicKey.findProgramAddressSync(
@@ -166,6 +171,7 @@ describe("VeilLend PRD Acceptance Tests", () => {
                   vault,
                   // protectionPool, // Moved
                   vaultCollateralAccount,
+                  merkleTree,
                   // protectionReserveAccount, // Moved
                   // receiptMint, // Moved
                   // borrowMint, // Moved
