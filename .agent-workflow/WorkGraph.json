@@ -229,12 +229,39 @@
       ]
     },
     {
+      "id": "WG-045",
+      "title": "Harness deps + AT-HARNESS-003 verification",
+      "owner_agent": "tester",
+      "status": "completed",
+      "depends_on": [
+        "WG-002"
+      ],
+      "allowed_paths": [
+        "tests/",
+        "scripts/",
+        "package.json",
+        "package-lock.json",
+        "Anchor.toml",
+        ".agent-workflow/Test_Plan.md",
+        ".agent-workflow/PRD.json",
+        ".agent-workflow/progress/"
+      ],
+      "verify_cmds": [
+        "npm install",
+        "TEST_GREP=\"Withdraw with LTV\" COPYFILE_DISABLE=1 anchor test --skip-local-validator"
+      ],
+      "outputs": [
+        "AT-HARNESS-003 passes with deps present"
+      ]
+    },
+    {
       "id": "WG-042",
       "title": "UI smoke/E2E tests for critical secure paths",
       "owner_agent": "frontend",
-      "status": "planned",
+      "status": "completed",
       "depends_on": [
-        "WG-040"
+        "WG-040",
+        "WG-045"
       ],
       "allowed_paths": [
         "src/",
@@ -267,6 +294,27 @@
       ],
       "outputs": [
         "Runnable demo instructions"
+      ]
+    },
+    {
+      "id": "WG-051",
+      "title": "Docs refactor: runbook + README structure",
+      "owner_agent": "docs",
+      "status": "planned",
+      "depends_on": [
+        "WG-050"
+      ],
+      "allowed_paths": [
+        "README.md",
+        "RUNBOOK.md",
+        ".agent-workflow/"
+      ],
+      "verify_cmds": [
+        "cat README.md",
+        "cat RUNBOOK.md"
+      ],
+      "outputs": [
+        "Docs structure refactor complete"
       ]
     }
   ],
