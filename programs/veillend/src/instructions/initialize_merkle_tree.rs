@@ -8,9 +8,6 @@ pub struct InitializeMerkleTree<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    #[account(
-        constraint = vault.authority == authority.key()
-    )]
     pub vault: Box<Account<'info, Vault>>,
 
     #[account(
@@ -27,9 +24,19 @@ pub struct InitializeMerkleTree<'info> {
 
 pub fn initialize_merkle_tree(ctx: Context<InitializeMerkleTree>) -> Result<()> {
     let tree = &mut ctx.accounts.merkle_tree;
+    msg!(
+        "[debug][sc] initialize_merkle_tree vault={} merkle_tree={}",
+        ctx.accounts.vault.key(),
+        tree.key()
+    );
     tree.vault = ctx.accounts.vault.key();
     tree.bump = ctx.bumps.merkle_tree;
     init_tree(tree)?;
+    msg!(
+        "[debug][sc] merkle initialized root={:?} next_index={}",
+        tree.root,
+        tree.next_index
+    );
 
     emit!(MerkleTreeInitializedEvent {
         vault: tree.vault,
