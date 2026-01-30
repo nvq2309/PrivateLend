@@ -43,13 +43,15 @@ curl -s http://127.0.0.1:8899 -X POST -H 'Content-Type: application/json' \
 ## 2) Anchor / contract tests
 
 ### 2.1 Targeted test (fast loop)
-When filtering tests, ensure grep is passed to mocha (not cargo-build-sbf):
+When filtering tests, set `TEST_GREP` so `tests/anchor-test.sh` forwards it to ts-mocha (avoids cargo argument errors) and let Anchor manage the validator:
 ```bash
-anchor test --skip-local-validator -- --grep "Withdraw with LTV"
+npm install
+TEST_GREP="Withdraw with LTV" COPYFILE_DISABLE=1 anchor test
 ```
 
 Notes:
-- If you see an error like “Found argument '--grep' which wasn't expected” it usually means grep was passed to the wrong layer (build step), not to mocha. Fix the command invocation first.
+- If you explicitly want to reuse a running validator, start it first (`./scripts/start-validator.sh`) and add `--skip-local-validator` to the command after confirming RPC health.
+- Avoid appending `-- --grep ...` directly to `anchor test`; that routes `--grep` to `cargo-build-sbf` instead of mocha and causes the failure we're eliminating.
 
 ### 2.2 Deterministic randomized suite (slower)
 Use seeded runs for reproducibility:

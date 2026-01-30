@@ -199,8 +199,8 @@
       "priority": "P0",
       "description": "Test runner dependencies are installed (ts-mocha available) and tests start.",
       "verify_cmd": "npm install && anchor test --skip-local-validator -- --grep \"Withdraw with LTV\"",
-      "passes": false,
-      "evidence": ""
+      "passes": true,
+      "evidence": "2026-01-28: npm install; TEST_GREP=\"Withdraw with LTV\" COPYFILE_DISABLE=1 anchor test (6 passing)."
     },
     {
       "id": "AT-NOTE-001",
