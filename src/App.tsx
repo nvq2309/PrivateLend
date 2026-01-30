@@ -14,10 +14,13 @@ import {
   saveNoteRecord,
 } from './sdk/notes';
 import {
+  createPrivacyNote,
+  getNextNoteIndex,
   getUnspentNotes,
   loadPrivacyNotes,
   loadSecrets,
   initializeSecrets,
+  savePrivacyNote,
   savePrivacyNotes,
   saveSecrets,
   toHex as toHexBytes,
@@ -32,6 +35,8 @@ import {
 } from './sdk/noteString';
 import { WSOL_MINT, USDC_MINT } from './config/solana';
 import { isE2e } from './config/e2e';
+
+import { SavedNotes } from './components/SavedNotes';
 
 const MARKET_BASE = {
   SOL: { price: 145.2, supplyApy: 6.5, borrowApy: 8.2, ltv: 0.75, liquidationThreshold: 0.85 },
@@ -112,7 +117,6 @@ type NoteAccessRecord = {
   version: 1;
   noteHash: string;
   noteString?: string;
-  lastTxnId: string;
   privacyNotes: PrivacyNoteV2[];
   secrets: { blindingFactor: string; spendingKey: string };
   createdAt: number;
@@ -124,6 +128,9 @@ const isNoteHash = (value: string) => /^[0-9a-fA-F]{64}$/.test(value);
 
 const parseTransactionError = (error: unknown): string => {
   const message = error instanceof Error ? error.message : String(error);
+  if (!message || message.trim().length === 0) {
+    return 'Transaction failed. No error detail from wallet.';
+  }
 
   for (const [code, friendly] of Object.entries(VEILLEND_ERROR_MAP)) {
     if (message.includes(code)) return friendly;
@@ -172,18 +179,24 @@ const App = () => {
   const [pendingNote, setPendingNote] = useState<NoteRecord | null>(null);
   const [noteSaved, setNoteSaved] = useState(false);
   const [importNoteHash, setImportNoteHash] = useState('');
-  const [importLastTxnId, setImportLastTxnId] = useState('');
   const [draftNote, setDraftNote] = useState<NoteRecord | null>(null);
+  const [draftPrivacyNote, setDraftPrivacyNote] = useState<PrivacyNoteV2 | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
 
   const solHooks = useVeilLend(WSOL_MINT);
   const usdcHooks = useVeilLend(USDC_MINT);
 
   const handleViewChange = useCallback((nextView: 'MARKET' | 'PORTFOLIO') => {
+    console.debug('[strict][ui] handleViewChange', {
+      prevView: view,
+      nextView,
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null,
+      e2eEnabled
+    });
     setView(nextView);
     if (!e2eEnabled || typeof window === 'undefined') return;
     window.scrollTo(0, 0);
-  }, [e2eEnabled]);
+  }, [e2eEnabled, view, walletAddress]);
 
   const normalizePrivacyNoteVault = useCallback((note: PrivacyNoteV2, vaultAddress: string) => {
     try {
@@ -225,6 +238,16 @@ const App = () => {
     const noteString = buildNoteStringForSymbol('SOL', draftNote.noteHash);
     return noteString ?? (e2eEnabled ? e2ePlaceholderNote : 'Generating note...');
   }, [draftNote, buildNoteStringForSymbol, e2eEnabled, e2ePlaceholderNote]);
+
+  const draftNoteReady = useMemo(
+    () => Boolean(
+      draftNote
+        && draftNote.noteString
+        && draftNote.noteString.startsWith(NOTE_STRING_PREFIX)
+        && draftPrivacyNote,
+    ),
+    [draftNote, draftPrivacyNote],
+  );
 
   const attachLatestNoteString = useCallback(
     (noteRecord: NoteRecord | null, symbol: 'SOL' | 'USDC') => {
@@ -273,7 +296,6 @@ const App = () => {
         version: 1,
         noteHash: noteRecord.noteHash,
         noteString: noteRecord.noteString,
-        lastTxnId: noteRecord.lastTxnId,
         privacyNotes,
         secrets: secretsPayload,
         createdAt: noteRecord.createdAt ?? now,
@@ -293,7 +315,6 @@ const App = () => {
         walletAddress,
         noteHash: access.noteHash,
         noteString,
-        lastTxnId: access.lastTxnId || 'imported',
         createdAt: access.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
@@ -340,8 +361,6 @@ const App = () => {
     programError,
     fastAdapter,
     secureAdapter,
-    vaultAuthority,
-    initializeMerkleTree,
     isMerkleTreeInitialized,
   } = activeHooks;
 
@@ -418,6 +437,17 @@ const App = () => {
     }
     const nextHooks = getHooks(action, symbol);
     const nextMode: LendingMode = nextHooks.isMerkleTreeInitialized ? 'SECURE' : 'FAST';
+    console.warn('[strict][ui] openAction', {
+      action,
+      symbol,
+      nextMode,
+      isMerkleTreeInitialized: nextHooks.isMerkleTreeInitialized,
+      hasNote: Boolean(note),
+      noteHashPrefix: note?.noteHash ? note.noteHash.slice(0, 8) : null,
+      noteStringPrefix: note?.noteString ? note.noteString.slice(0, 20) : null,
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null,
+      buttonWillBeDisabled: nextMode === 'SECURE' && !note,
+    });
     setActiveAction(action);
     setActiveSymbol(symbol);
     setAmount('');
@@ -432,6 +462,11 @@ const App = () => {
   };
 
   const closeAction = () => {
+    console.debug('[strict][ui] closeAction', {
+      action: activeAction,
+      symbol: activeSymbol,
+      wasBusy: actionBusy
+    });
     setActiveAction(null);
     setAmount('');
     setActionError(null);
@@ -441,29 +476,17 @@ const App = () => {
   };
 
   const showMerkleInit = mode === 'SECURE' && !isMerkleTreeInitialized;
-  const canInitMerkleTree = Boolean(publicKey && vaultAuthority && publicKey.equals(vaultAuthority));
-
-  const handleInitMerkleTree = async () => {
-    setActionBusy(true);
-    setActionMessage('Initializing privacy tree...');
-    setActionError(null);
-    try {
-      await initializeMerkleTree();
-      showActionSuccess('Merkle tree initialized successfully.');
-    } catch (error) {
-      setActionError(parseTransactionError(error));
-    } finally {
-      setActionBusy(false);
-      setActionMessage('');
-    }
-  };
 
   const handleConfirm = async () => {
     if (!activeAction) return;
-    if (showMerkleInit) {
-      setActionError('Merkle tree not initialized.');
-      return;
-    }
+    console.debug('[strict][ui] handleConfirm start', {
+      mode,
+      action: activeAction,
+      symbol: activeSymbol,
+      amountUi: amount,
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null,
+      noteHashPrefix: note?.noteHash ? note.noteHash.slice(0, 8) : null,
+    });
     if (!walletAddress) {
       setActionError('Connect wallet to continue.');
       return;
@@ -510,6 +533,11 @@ const App = () => {
             const result = await adapter.supply(lamports);
             signature = result.signature;
             proofResult = result.proof ?? null;
+            console.debug('[strict][ui] supply submitted', {
+              signature: signature.slice(0, 10) + '...',
+              hasProof: Boolean(proofResult),
+              mode
+            });
           }
           break;
         case 'BORROW':
@@ -517,6 +545,11 @@ const App = () => {
             const result = await adapter.borrow(lamports);
             signature = result.signature;
             proofResult = result.proof ?? null;
+            console.debug('[strict][ui] borrow submitted', {
+              signature: signature.slice(0, 10) + '...',
+              hasProof: Boolean(proofResult),
+              mode
+            });
           }
           break;
         case 'REPAY':
@@ -524,6 +557,11 @@ const App = () => {
             const result = await adapter.repay(lamports);
             signature = result.signature;
             proofResult = result.proof ?? null;
+            console.debug('[strict][ui] repay submitted', {
+              signature: signature.slice(0, 10) + '...',
+              hasProof: Boolean(proofResult),
+              mode
+            });
           }
           break;
         case 'WITHDRAW':
@@ -531,6 +569,11 @@ const App = () => {
             const result = await adapter.withdraw(lamports);
             signature = result.signature;
             proofResult = result.proof ?? null;
+            console.debug('[strict][ui] withdraw submitted', {
+              signature: signature.slice(0, 10) + '...',
+              hasProof: Boolean(proofResult),
+              mode
+            });
           }
           break;
         default:
@@ -553,6 +596,16 @@ const App = () => {
 
       showActionSuccess(`${actionLabel} completed successfully.`, mode === 'SECURE' && Boolean(nextNote));
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorName = error instanceof Error ? error.name : typeof error;
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      console.error('[strict][ui] handleConfirm error', {
+        action: activeAction,
+        mode,
+        message: errorMessage,
+        name: errorName,
+        stack: errorStack,
+      });
       setActionError(parseTransactionError(error));
     } finally {
       setActionBusy(false);
@@ -562,6 +615,11 @@ const App = () => {
 
   const handleSaveNote = async () => {
     if (!pendingNote) return;
+    console.debug('[strict][ui] handleSaveNote', {
+      noteHashPrefix: pendingNote.noteHash ? pendingNote.noteHash.slice(0, 8) : null,
+      hasNoteString: Boolean(pendingNote.noteString),
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null
+    });
     const resolved = attachLatestNoteString(pendingNote, activeSymbol as 'SOL' | 'USDC') ?? pendingNote;
     saveNoteRecord(resolved);
     writeNoteAccessRecord(resolved);
@@ -628,7 +686,6 @@ const App = () => {
       }
       applyNoteAccessRecord(access);
       setImportNoteHash('');
-      setImportLastTxnId('');
       showActionSuccess('Access restored.');
       setView('PORTFOLIO');
       return;
@@ -647,7 +704,6 @@ const App = () => {
     if (access) {
       applyNoteAccessRecord(access, normalizedInput);
       setImportNoteHash('');
-      setImportLastTxnId('');
       showActionSuccess('Access restored.');
       setView('PORTFOLIO');
       return;
@@ -678,43 +734,94 @@ const App = () => {
     );
     savePrivacyNotes(walletAddress, [...existingNotes, privacyNote]);
 
-    const lastTxnId = importLastTxnId.trim() || 'imported';
     const record: NoteRecord = {
       version: 1,
       walletAddress,
       noteHash: payload.noteHash,
-          noteString: normalizedInput,
-      lastTxnId,
+      noteString: normalizedInput,
       createdAt: Number(payload.timestamp),
       updatedAt: Date.now(),
     };
     saveNoteRecord(record);
     refreshAllNotes();
     setImportNoteHash('');
-    setImportLastTxnId('');
     showActionSuccess('Access restored.');
     setView('PORTFOLIO');
   };
 
   const handleCreateInitialNote = async () => {
+    console.warn('[strict][ui] handleCreateInitialNote start', {
+      walletAddress,
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null,
+      hasPublicKey: Boolean(publicKey),
+      publicKeyBase58: publicKey?.toBase58()?.slice(0, 8) ?? null,
+    });
     if (!walletAddress) {
       showPageError('Connect wallet to create a note.');
       return;
     }
-    const record = await createInitialNoteRecord(walletAddress);
-    // Wait for vault addresses to be available before building note string
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const withString = attachLatestNoteString(record, 'SOL');
-    setDraftNote(withString ?? record);
+    const vaultAddress = solHooks.vaultAddress?.toBase58();
+    if (!vaultAddress) {
+      showPageError('Vault is still initializing. Please try again in a moment.');
+      return;
+    }
+    setDraftNote(null);
+    setDraftPrivacyNote(null);
+    try {
+      const record = await createInitialNoteRecord(walletAddress);
+      const noteIndex = getNextNoteIndex(walletAddress);
+      const privacyNote = await createPrivacyNote({
+        walletAddress,
+        ownerPubkey: publicKey?.toBytes() ?? new Uint8Array(32),
+        vaultAddress,
+        depositAmount: 0n,
+        borrowAmount: 0n,
+        noteIndex,
+        collateralSymbol: 'SOL',
+      });
+      const noteString = buildNoteStringFromPrivacyNote(privacyNote, 'SOL', record.noteHash);
+      console.warn('[strict][ui] handleCreateInitialNote created', {
+        noteHashPrefix: record.noteHash.slice(0, 8),
+        noteStringPrefix: noteString.slice(0, 20),
+        walletAddress,
+      });
+      setDraftPrivacyNote(privacyNote);
+      setDraftNote({ ...record, noteString });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[strict][ui] handleCreateInitialNote error', { message });
+      showPageError(message);
+    }
   };
 
   const handleSaveDraftNote = async () => {
-    if (!draftNote) return;
+    console.warn('[strict][ui] handleSaveDraftNote start', {
+      hasDraftNote: Boolean(draftNote),
+      draftNoteReady,
+      walletAddress,
+      walletPrefix: walletAddress ? toShortHash(walletAddress, 4) : null,
+      noteHashPrefix: draftNote?.noteHash?.slice(0, 8) ?? null,
+    });
+    if (!draftNote || !draftNoteReady || !walletAddress) {
+      console.warn('[strict][ui] handleSaveDraftNote early exit', {
+        reason: !draftNote ? 'no draftNote' : !draftNoteReady ? 'draftNoteReady=false' : 'no walletAddress',
+      });
+      return;
+    }
+    if (draftPrivacyNote) {
+      savePrivacyNote(walletAddress, draftPrivacyNote);
+    }
     saveNoteRecord(draftNote);
+    console.warn('[strict][ui] handleSaveDraftNote saved', {
+      storageKey: `veillend.note:${draftNote.walletAddress}`,
+      noteHashPrefix: draftNote.noteHash.slice(0, 8),
+    });
     writeNoteAccessRecord(draftNote);
     await copyNoteString(draftNote);
     refreshAllNotes();
+    console.warn('[strict][ui] handleSaveDraftNote refreshed notes');
     setDraftNote(null);
+    setDraftPrivacyNote(null);
     showActionSuccess('Note created and saved successfully.');
     setView('PORTFOLIO');
   };
@@ -928,14 +1035,7 @@ const App = () => {
                               type="text"
                               value={importNoteHash}
                               onChange={(event) => setImportNoteHash(event.target.value)}
-                placeholder="Paste note string..."
-                              className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm focus:border-emerald-500/50 focus:outline-none transition-colors font-mono"
-                            />
-                            <input
-                              type="text"
-                              value={importLastTxnId}
-                              onChange={(event) => setImportLastTxnId(event.target.value)}
-                              placeholder="Last transaction ID (Optional)"
+                              placeholder="Paste note string..."
                               className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm focus:border-emerald-500/50 focus:outline-none transition-colors font-mono"
                             />
                             <button
@@ -974,26 +1074,43 @@ const App = () => {
                           ) : (
                             <div className="space-y-3 relative z-10">
                               <div className="p-3 bg-black/40 rounded-xl border border-emerald-500/20">
-                                <p className="text-[10px] uppercase tracking-widest text-emerald-500/70 font-bold mb-2">Your New Note</p>
+                                <p className="text-[10px] uppercase tracking-widest text-emerald-500/70 font-bold mb-2">
+                                  Note Access Hash
+                                </p>
+                                <code
+                                  className="text-xs font-mono text-emerald-200 break-all block leading-relaxed"
+                                  data-snapshot="dynamic"
+                                  data-testid="note-access-hash"
+                                >
+                                  {draftNote?.noteHash ?? 'Unavailable'}
+                                </code>
+                              </div>
+                              <div className="p-3 bg-black/40 rounded-xl border border-emerald-500/20">
+                                <p className="text-[10px] uppercase tracking-widest text-emerald-500/70 font-bold mb-2">
+                                  Note String
+                                </p>
                                 <code
                                   className="text-xs font-mono text-emerald-300 break-all block leading-relaxed"
                                   data-snapshot="dynamic"
+                                  data-testid="note-string"
                                 >
-                    {draftNoteString}
+                                  {draftNoteString}
                                 </code>
                               </div>
                               <button
                                 type="button"
                                 onClick={handleSaveDraftNote}
-                                className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-all shadow-lg shadow-emerald-900/20"
+                                disabled={!draftNoteReady}
+                                className="w-full py-3 rounded-xl text-sm font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-all shadow-lg shadow-emerald-900/20 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:bg-emerald-500"
                               >
-                                Confirm & Save
+                                Copy & Save
                               </button>
                             </div>
                           )}
                         </div>
                       </div>
                     </div>
+                    <SavedNotes />
                   </div>
                 ) : (
                   <div className="space-y-6">
@@ -1113,9 +1230,6 @@ const App = () => {
                             Updated: {new Date(note.updatedAt).toLocaleString()}
                           </span>
                           <span className="hidden md:inline text-white/10">|</span>
-                          <span data-snapshot="dynamic">
-                            Last Tx: {toShortHash(note.lastTxnId, 16)}
-                          </span>
                         </div>
                         <div className="flex items-center gap-2">
                           <div className={`w-1.5 h-1.5 rounded-full ${healthFactor > 1.2 ? 'bg-emerald-500' : 'bg-red-500'}`} />
@@ -1241,9 +1355,7 @@ const App = () => {
           onClose={closeAction}
           onSaveNote={pendingNote ? handleSaveNote : undefined}
           onMaxClick={() => setAmount(String(maxByAction(activeAction).toFixed(4)))}
-          showMerkleInit={showMerkleInit}
-          canInitMerkleTree={canInitMerkleTree}
-          onInitMerkleTree={handleInitMerkleTree}
+        showMerkleInit={showMerkleInit}
         />
       )}
 

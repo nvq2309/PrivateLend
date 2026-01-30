@@ -24,8 +24,6 @@ interface ActionModalProps {
   onSaveNote?: () => void;
   onMaxClick?: () => void;
   showMerkleInit?: boolean;
-  canInitMerkleTree?: boolean;
-  onInitMerkleTree?: () => void;
 }
 
 const modeCopy = (mode: LendingMode) =>
@@ -58,8 +56,6 @@ export const ActionModal: React.FC<ActionModalProps> = ({
   onSaveNote,
   onMaxClick,
   showMerkleInit,
-  canInitMerkleTree,
-  onInitMerkleTree,
 }) => {
   const modeText = modeCopy(mode);
   const titleId = 'action-modal-title';
@@ -169,12 +165,6 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                   {note?.noteString ? `${note.noteString.slice(0, 12)}...` : 'None'}
                 </span>
               </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Last tx id</span>
-                <span className="text-slate-300" data-snapshot="dynamic">
-                  {note ? note.lastTxnId.slice(0, 10) : '0'}
-                </span>
-              </div>
             </div>
           )}
 
@@ -189,22 +179,11 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                 <div className="space-y-1">
                   <p className="font-bold text-amber-200">Merkle Tree Missing</p>
                   <p className="text-amber-200/70 leading-relaxed">
-                    {canInitMerkleTree
-                      ? 'The privacy tree must be initialized before shielded actions can be performed.'
-                      : 'The vault authority has not initialized the privacy tree yet. Shielded actions are currently disabled.'}
+                    The privacy tree will initialize automatically on your first shielded action. No manual activation is
+                    required.
                   </p>
                 </div>
               </div>
-              {canInitMerkleTree && (
-                <button
-                  type="button"
-                  onClick={onInitMerkleTree}
-                  disabled={busy}
-                  className="w-full py-2.5 rounded-xl font-bold bg-amber-500 hover:bg-amber-400 text-slate-900 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-900/20"
-                >
-                  Initialize Tree
-                </button>
-              )}
             </div>
           )}
 
@@ -249,7 +228,8 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                <p className="font-bold text-amber-200">No Active Note</p>
                <p className="text-amber-200/70">
                  You need an active privacy note to perform shielded actions.
-                 Please import or create a note in your portfolio first.
+                 Please import or create a note in your portfolio first. Without a note, shielded transactions cannot be
+                 recorded to your private ledger later.
                </p>
             </div>
           )}
@@ -257,12 +237,12 @@ export const ActionModal: React.FC<ActionModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!amount || busy || showMerkleInit || (mode === 'SECURE' && !note)}
+            disabled={!amount || busy || (mode === 'SECURE' && !note)}
             className={`w-full py-4 rounded-2xl text-lg font-bold transition-all ${
               mode === 'SECURE'
                 ? 'bg-gradient-to-r from-cyan-500 to-emerald-400 text-slate-900 shadow-lg shadow-emerald-500/20'
                 : 'bg-white text-slate-900'
-            } ${(!amount || busy || showMerkleInit || (mode === 'SECURE' && !note)) && 'opacity-50 cursor-not-allowed'}`}
+            } ${(!amount || busy || (mode === 'SECURE' && !note)) && 'opacity-50 cursor-not-allowed'}`}
           >
             {busy ? 'Working...' : mode === 'SECURE' ? 'Shield and Execute' : 'Execute'}
           </button>
