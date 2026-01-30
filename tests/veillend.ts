@@ -386,6 +386,7 @@ describe("VeilLend with Protection & Privacy", () => {
           vault,
           // protectionPool, // Moved
           vaultCollateralAccount,
+          merkleTree,
           // protectionReserveAccount, // Moved
           // receiptMint, // Moved
           // borrowMint, // Moved
@@ -421,16 +422,6 @@ describe("VeilLend with Protection & Privacy", () => {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-
-      await program.methods
-        .initializeMerkleTree()
-        .accountsStrict({
-          authority: authority.publicKey,
-          vault,
-          merkleTree,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -1109,6 +1100,7 @@ const encryptedBalance = getEncryptedBalance(
           authority: authority.publicKey,
           vault: e2eVault,
           vaultCollateralAccount: e2eVaultCollateralAccount,
+          merkleTree: e2eMerkleTree,
           collateralMint: e2eCollateralMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1140,16 +1132,6 @@ const encryptedBalance = getEncryptedBalance(
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-
-      await program.methods
-        .initializeMerkleTree()
-        .accountsStrict({
-          authority: authority.publicKey,
-          vault: e2eVault,
-          merkleTree: e2eMerkleTree,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -1587,6 +1569,7 @@ const encryptedBalance = getEncryptedBalance(
           authority: authority.publicKey,
           vault: fastVault,
           vaultCollateralAccount: fastVaultCollateralAccount,
+          merkleTree: fastMerkleTree,
           collateralMint: fastCollateralMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1618,16 +1601,6 @@ const encryptedBalance = getEncryptedBalance(
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-
-      await program.methods
-        .initializeMerkleTree()
-        .accountsStrict({
-          authority: authority.publicKey,
-          vault: fastVault,
-          merkleTree: fastMerkleTree,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -1819,6 +1792,7 @@ const encryptedBalance = getEncryptedBalance(
           authority: authority.publicKey,
           vault: secureVault,
           vaultCollateralAccount: secureVaultCollateralAccount,
+          merkleTree: secureMerkleTree,
           collateralMint: secureCollateralMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
@@ -1850,16 +1824,6 @@ const encryptedBalance = getEncryptedBalance(
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-
-      await program.methods
-        .initializeMerkleTree()
-        .accountsStrict({
-          authority: authority.publicKey,
-          vault: secureVault,
-          merkleTree: secureMerkleTree,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
 
@@ -2272,6 +2236,7 @@ const encryptedBalance = getEncryptedBalance(
             authority: authority.publicKey,
             vault,
             vaultCollateralAccount,
+            merkleTree,
             collateralMint,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
@@ -2306,15 +2271,6 @@ const encryptedBalance = getEncryptedBalance(
           })
           .rpc();
 
-        await program.methods
-          .initializeMerkleTree()
-          .accountsStrict({
-            authority: authority.publicKey,
-            vault,
-            merkleTree,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
       }
       if (!noteHash) {
         noteHash = new Uint8Array(Buffer.alloc(32, 1));
@@ -2565,6 +2521,7 @@ const encryptedBalance = getEncryptedBalance(
                 authority: authority.publicKey,
                 vault: scenarioVault,
                 vaultCollateralAccount: scenarioVaultCollateralAccount,
+                merkleTree: scenarioMerkleTree,
                 collateralMint: scenarioCollateralMint,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
@@ -2598,17 +2555,6 @@ const encryptedBalance = getEncryptedBalance(
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-            })
-            .rpc();
-
-        // 4. Initialize Merkle Tree
-        await program.methods
-            .initializeMerkleTree()
-            .accountsStrict({
-                authority: authority.publicKey,
-                vault: scenarioVault,
-                merkleTree: scenarioMerkleTree,
-                systemProgram: SystemProgram.programId,
             })
             .rpc();
 
@@ -2724,6 +2670,7 @@ const encryptedBalance = getEncryptedBalance(
                 authority: authority.publicKey,
                 vault: repayVault,
                 vaultCollateralAccount: repayVaultCollateralAccount,
+                merkleTree: repayMerkleTree,
                 collateralMint: repayCollateralMint,
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
@@ -2755,16 +2702,6 @@ const encryptedBalance = getEncryptedBalance(
                 tokenProgram: TOKEN_PROGRAM_ID,
                 systemProgram: SystemProgram.programId,
                 rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-            })
-            .rpc();
-
-        await program.methods
-            .initializeMerkleTree()
-            .accountsStrict({
-                authority: authority.publicKey,
-                vault: repayVault,
-                merkleTree: repayMerkleTree,
-                systemProgram: SystemProgram.programId,
             })
             .rpc();
 

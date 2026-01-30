@@ -90,6 +90,14 @@ pub mod veillend {
         )
     }
 
+    pub fn shield_position(
+        ctx: Context<ShieldPosition>,
+        note_hash: [u8; 32],
+        commitment: [u8; 32],
+    ) -> Result<()> {
+        instructions::shield_position::shield_position(ctx, note_hash, commitment)
+    }
+
     pub fn withdraw(
         ctx: Context<Withdraw>,
         shares_to_burn: u64,

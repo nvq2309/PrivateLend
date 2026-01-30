@@ -10,6 +10,7 @@ pub mod initialize_mints; // New split instruction
 pub mod initialize_protection; // New split instruction
 pub mod repay;
 pub mod repay_secure;
+pub mod shield_position;
 pub mod subscribe_protection; // from PR#2
 pub mod withdraw;
 pub mod withdraw_secure; // from PR#2
@@ -26,6 +27,7 @@ pub use initialize_mints::*;
 pub use initialize_protection::*;
 pub use repay::*;
 pub use repay_secure::*;
+pub use shield_position::*;
 pub use subscribe_protection::*;
 pub use withdraw::*;
 pub use withdraw_secure::*;
