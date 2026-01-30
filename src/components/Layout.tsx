@@ -25,19 +25,54 @@ export const Layout: React.FC<LayoutProps> = ({
   const { publicKey, connected, connect, disconnect, select } = useWallet();
   const { setVisible } = useWalletModal();
   const e2eEnabled = isE2e();
+  const showDebug = typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).has('debug');
 
   useEffect(() => {
     if (!e2eEnabled || connected) return;
-    select('TestWallet' as WalletName);
-    connect().catch(() => undefined);
+    try {
+      console.debug('[strict][ui] wallet autoConnect', {
+        connected,
+        e2eEnabled,
+      });
+      select('TestWallet' as WalletName);
+      connect().catch((error) => {
+        console.error('[strict][ui] wallet autoConnect error', {
+          message: (error as Error | undefined)?.message,
+        });
+      });
+    } catch {
+    }
   }, [connect, connected, e2eEnabled, select]);
 
   const handleWalletClick = async () => {
     if (!connected) {
+      console.debug('[strict][ui] wallet connect modal', {
+        connected,
+        walletPrefix: publicKey ? shortenAddress(publicKey.toBase58()) : null,
+      });
       setVisible(true);
       return;
     }
+    console.debug('[strict][ui] wallet disconnect', {
+      walletPrefix: publicKey ? shortenAddress(publicKey.toBase58()) : null,
+    });
     await disconnect();
+  };
+
+  const handleCopyLogs = async () => {
+    const exporter = (window as Window & {
+      __VEILLEND_STRICT_LOGS_EXPORT__?: () => string;
+    }).__VEILLEND_STRICT_LOGS_EXPORT__;
+    if (!exporter || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(exporter());
+      console.debug('[strict][ui] debug log copied');
+    } catch (error) {
+      console.error('[strict][ui] debug log copy failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
   return (
@@ -83,6 +118,15 @@ export const Layout: React.FC<LayoutProps> = ({
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               {clusterLabel ?? 'Localnet'}
             </div>
+            {showDebug && (
+              <button
+                type="button"
+                onClick={handleCopyLogs}
+                className="text-[10px] uppercase tracking-[0.2em] text-cyan-200 border border-cyan-400/40 px-3 py-2 rounded-full hover:bg-cyan-500/10"
+              >
+                Copy Debug Log
+              </button>
+            )}
             <button
               type="button"
               onClick={handleWalletClick}
