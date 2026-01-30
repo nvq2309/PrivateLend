@@ -274,6 +274,7 @@ describe('Comprehensive Smart Contract Security Tests', function() {
   let collateralMint: PublicKey;
   let vault: PublicKey;
   let vaultCollateralAccount: PublicKey;
+  let merkleTree: PublicKey;
   let borrowMint: PublicKey;
   let receiptMint: PublicKey;
   let wallet1Receipt: PublicKey;
@@ -314,6 +315,11 @@ describe('Comprehensive Smart Contract Security Tests', function() {
     
     [vaultCollateralAccount] = PublicKey.findProgramAddressSync(
       [Buffer.from('vault_collateral'), vault.toBuffer()],
+      program.programId
+    );
+
+    [merkleTree] = PublicKey.findProgramAddressSync(
+      [Buffer.from('merkle_tree'), vault.toBuffer()],
       program.programId
     );
     
@@ -391,6 +397,7 @@ describe('Comprehensive Smart Contract Security Tests', function() {
         authority: authority.publicKey,
         vault,
         vaultCollateralAccount,
+        merkleTree,
         collateralMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,

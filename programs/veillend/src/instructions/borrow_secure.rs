@@ -6,7 +6,7 @@ use kamino_lend::cpi::{borrow_obligation_liquidity, refresh_obligation, refresh_
 use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
-use crate::merkle::{append_leaf, verify_merkle_proof};
+use crate::merkle::{append_leaf, initialize_merkle_tree as init_tree, verify_merkle_proof};
 use crate::state::*;
 use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16Proof, ZkAction};
 
@@ -44,9 +44,11 @@ pub struct BorrowSecure<'info> {
     pub user_borrow_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = user,
+        space = 8 + MerkleTree::INIT_SPACE,
         seeds = [MERKLE_TREE_SEED, vault.key().as_ref()],
-        bump = merkle_tree.bump,
+        bump,
     )]
     pub merkle_tree: Box<Account<'info, MerkleTree>>,
 
@@ -91,9 +93,20 @@ pub fn borrow_secure<'info>(
         return err!(VeilLendError::ArciumClientKeyMissing);
     }
 
+    let merkle_tree = &mut ctx.accounts.merkle_tree;
+    if merkle_tree.depth == 0 {
+        merkle_tree.vault = vault.key();
+        merkle_tree.bump = ctx.bumps.merkle_tree;
+        init_tree(merkle_tree)?;
+    }
+    require!(
+        merkle_tree.vault == vault.key(),
+        VeilLendError::InvalidVaultState
+    );
+
     let nullifier_hash = poseidon_nullifier_hash(&nullifier)?;
     let public_inputs = [
-        ctx.accounts.merkle_tree.root,
+        merkle_tree.root,
         nullifier_hash,
         current_commitment,
         new_commitment,
@@ -118,13 +131,9 @@ pub fn borrow_secure<'info>(
         VeilLendError::BorrowLimitExceeded
     );
 
-    require!(
-        ctx.accounts.merkle_tree.vault == vault.key(),
-        VeilLendError::InvalidVaultState
-    );
     verify_merkle_proof(
         current_commitment,
-        ctx.accounts.merkle_tree.root,
+        merkle_tree.root,
         &merkle_proof,
         &merkle_path,
     )?;
@@ -212,7 +221,7 @@ pub fn borrow_secure<'info>(
     ctx.accounts.nullifier_account.spent = true;
     ctx.accounts.nullifier_account.bump = ctx.bumps.nullifier_account;
 
-    let leaf_index = append_leaf(&mut ctx.accounts.merkle_tree, new_commitment)?;
+    let leaf_index = append_leaf(merkle_tree, new_commitment)?;
 
     vault.total_borrowed = vault
         .total_borrowed
@@ -230,7 +239,7 @@ pub fn borrow_secure<'info>(
         new_commitment,
         nullifier,
         leaf_index,
-        merkle_root: ctx.accounts.merkle_tree.root,
+        merkle_root: merkle_tree.root,
         timestamp: Clock::get()?.unix_timestamp,
     });
 
