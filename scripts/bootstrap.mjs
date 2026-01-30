@@ -31,7 +31,7 @@ const RPC_URL =
   process.env.VITE_SOLANA_RPC_URL ??
   (CHAIN === 'devnet' ? 'https://api.devnet.solana.com' : 'http://127.0.0.1:8899');
 
-const DEFAULT_SOL_DEPOSIT = CHAIN === 'devnet' ? 0.1 : 4;
+const DEFAULT_SOL_DEPOSIT = 0.01;
 const SOL_DEPOSIT_OVERRIDE = process.env.DEPOSIT_SOL_AMOUNT ?? process.env.BOOTSTRAP_SOL_AMOUNT;
 const SOL_DEPOSIT_AMOUNT = Number.parseFloat(SOL_DEPOSIT_OVERRIDE ?? String(DEFAULT_SOL_DEPOSIT));
 const bootstrapUsdcEnv = process.env.BOOTSTRAP_USDC;
@@ -202,6 +202,7 @@ const run = async () => {
         authority: deployer.publicKey,
         vault,
         vaultCollateralAccount,
+        merkleTree,
         collateralMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -237,18 +238,6 @@ const run = async () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .rpc();
-  });
-
-  await maybeInitialize('merkle-tree', async () => {
-    await program.methods
-      .initializeMerkleTree()
-      .accountsStrict({
-        authority: deployer.publicKey,
-        vault,
-        merkleTree,
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
   });
@@ -366,6 +355,7 @@ const run = async () => {
         authority: deployer.publicKey,
         vault: usdcVault,
         vaultCollateralAccount: usdcVaultCollateralAccount,
+        merkleTree: usdcMerkleTree,
         collateralMint: usdcMint,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
@@ -401,18 +391,6 @@ const run = async () => {
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
         rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-      })
-      .rpc();
-  });
-
-  await maybeInitialize('usdc-merkle-tree', async () => {
-    await program.methods
-      .initializeMerkleTree()
-      .accountsStrict({
-        authority: deployer.publicKey,
-        vault: usdcVault,
-        merkleTree: usdcMerkleTree,
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
   });
