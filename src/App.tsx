@@ -32,6 +32,7 @@ import {
   buildNoteStringFromPrivacyNote,
   buildPrivacyNoteFromNoteString,
   decodeNoteString,
+  encodeNoteString,
 } from './sdk/noteString';
 import { WSOL_MINT, USDC_MINT } from './config/solana';
 import { isE2e } from './config/e2e';
@@ -91,6 +92,24 @@ const copyNoteString = async (noteRecord: NoteRecord | null) => {
 
 const toShortHash = (value: string, length = 10) =>
   value.length > length ? `${value.slice(0, length)}...` : value;
+
+const randomBytes = (length: number) => {
+  if (!crypto?.getRandomValues) {
+    throw new Error('Secure random unavailable');
+  }
+  return crypto.getRandomValues(new Uint8Array(length));
+};
+
+const randomHex = (length: number) => toHexBytes(randomBytes(length));
+
+const randomU64 = () => {
+  const bytes = randomBytes(8);
+  let value = 0n;
+  for (const byte of bytes) {
+    value = (value << 8n) + BigInt(byte);
+  }
+  return value;
+};
 
 const VEILLEND_ERROR_MAP: Record<string, string> = {
   VaultPaused: 'The vault is currently paused. Please try again later.',
@@ -160,6 +179,8 @@ const App = () => {
       ? (window as Window & { __VEILLEND_E2E_WALLET_PUBLIC_KEY__?: string })
           .__VEILLEND_E2E_WALLET_PUBLIC_KEY__
       : null;
+  const demoMode = typeof window !== 'undefined'
+    && window.location.pathname.startsWith('/demo');
   const walletAddress =
     publicKey?.toBase58() ?? e2eOverride ?? (e2eEnabled ? 'e2e-wallet' : null);
   const [view, setView] = useState<'MARKET' | 'PORTFOLIO'>('MARKET');
@@ -244,9 +265,9 @@ const App = () => {
       draftNote
         && draftNote.noteString
         && draftNote.noteString.startsWith(NOTE_STRING_PREFIX)
-        && draftPrivacyNote,
+        && (draftPrivacyNote || demoMode),
     ),
-    [draftNote, draftPrivacyNote],
+    [demoMode, draftNote, draftPrivacyNote],
   );
 
   const attachLatestNoteString = useCallback(
@@ -360,6 +381,7 @@ const App = () => {
     borrowCapacityLamports,
     programError,
     fastAdapter,
+    noteFastAdapter,
     secureAdapter,
     isMerkleTreeInitialized,
   } = activeHooks;
@@ -436,7 +458,11 @@ const App = () => {
       window.scrollTo(0, 0);
     }
     const nextHooks = getHooks(action, symbol);
-    const nextMode: LendingMode = nextHooks.isMerkleTreeInitialized ? 'SECURE' : 'FAST';
+    const nextMode: LendingMode = demoMode
+      ? mode
+      : nextHooks.isMerkleTreeInitialized
+        ? 'SECURE'
+        : 'FAST';
     console.warn('[strict][ui] openAction', {
       action,
       symbol,
@@ -475,7 +501,7 @@ const App = () => {
     setNoteSaved(false);
   };
 
-  const showMerkleInit = mode === 'SECURE' && !isMerkleTreeInitialized;
+  const showMerkleInit = mode === 'SECURE' && !isMerkleTreeInitialized && !demoMode;
 
   const handleConfirm = async () => {
     if (!activeAction) return;
@@ -526,7 +552,12 @@ const App = () => {
 
     try {
       let signature = '';
-      const adapter = mode === 'SECURE' ? secureAdapter : fastAdapter;
+      const useFastForSecure = demoMode && mode === 'SECURE';
+      const adapter = useFastForSecure
+        ? (note?.noteString ? noteFastAdapter : fastAdapter)
+        : mode === 'SECURE'
+          ? secureAdapter
+          : fastAdapter;
       switch (activeAction) {
         case 'SUPPLY':
           {
@@ -580,16 +611,24 @@ const App = () => {
           break;
       }
 
-      if (mode === 'SECURE') {
+      const requiresNote = mode === 'SECURE' || demoMode;
+      if (requiresNote) {
         if (!note) {
-          setActionError('Import or create a note access key before using secure mode.');
+          setActionError('Import or create a note access key before using shielded mode.');
           return;
         }
-        setActionMessage('Rotating note...');
-        const baseNote = note;
-        nextNote = await rotateNoteRecord(walletAddress, signature, baseNote);
-        setProof(proofResult);
-        setPendingNote(nextNote);
+      }
+
+      if (mode === 'SECURE') {
+        if (useFastForSecure) {
+          closeAction();
+        } else {
+          setActionMessage('Rotating note...');
+          const baseNote = note ?? undefined;
+          nextNote = await rotateNoteRecord(walletAddress, signature, baseNote);
+          setProof(proofResult);
+          setPendingNote(nextNote);
+        }
       } else {
         closeAction();
       }
@@ -722,17 +761,19 @@ const App = () => {
       return;
     }
 
-    const ownerPubkey = publicKey?.toBytes() ?? new Uint8Array(32);
-    const privacyNote = await buildPrivacyNoteFromNoteString({
-      noteString: normalizedInput,
-      walletAddress,
-      ownerPubkey,
-      collateralSymbol: symbol,
-    });
-    const existingNotes = getUnspentNotes(walletAddress).filter(
-      (noteItem) => noteItem.vaultAddress !== payload.vaultAddress,
-    );
-    savePrivacyNotes(walletAddress, [...existingNotes, privacyNote]);
+    if (!demoMode) {
+      const ownerPubkey = publicKey?.toBytes() ?? new Uint8Array(32);
+      const privacyNote = await buildPrivacyNoteFromNoteString({
+        noteString: normalizedInput,
+        walletAddress,
+        ownerPubkey,
+        collateralSymbol: symbol,
+      });
+      const existingNotes = getUnspentNotes(walletAddress).filter(
+        (noteItem) => noteItem.vaultAddress !== payload.vaultAddress,
+      );
+      savePrivacyNotes(walletAddress, [...existingNotes, privacyNote]);
+    }
 
     const record: NoteRecord = {
       version: 1,
@@ -770,6 +811,29 @@ const App = () => {
     try {
       const record = await createInitialNoteRecord(walletAddress);
       const noteIndex = getNextNoteIndex(walletAddress);
+      if (demoMode) {
+        const noteHash = randomHex(32);
+        const noteString = encodeNoteString({
+          noteHash,
+          vaultAddress,
+          noteIndex: randomU64(),
+          nullifier: randomHex(32),
+          secret: randomHex(32),
+          supplySol: 0n,
+          supplyUsdc: 0n,
+          borrowSol: 0n,
+          borrowUsdc: 0n,
+          timestamp: BigInt(Date.now()),
+        });
+        console.warn('[strict][ui] handleCreateInitialNote created (demo)', {
+          noteHashPrefix: noteHash.slice(0, 8),
+          noteStringPrefix: noteString.slice(0, 20),
+          walletAddress,
+        });
+        setDraftPrivacyNote(null);
+        setDraftNote({ ...record, noteHash, noteString });
+        return;
+      }
       const privacyNote = await createPrivacyNote({
         walletAddress,
         ownerPubkey: publicKey?.toBytes() ?? new Uint8Array(32),
@@ -1349,6 +1413,7 @@ const App = () => {
           note={note}
           pendingNote={pendingNote}
           proof={proof}
+          demoMode={demoMode}
           onAmountChange={setAmount}
           onModeChange={setMode}
           onConfirm={handleConfirm}

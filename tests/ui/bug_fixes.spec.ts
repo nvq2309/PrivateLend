@@ -164,4 +164,30 @@ test.describe('Bug Fixes Verification', () => {
     const clipboardContent = await page.evaluate(() => (window as any).__VEILLEND_TEST_CLIPBOARD__);
     expect(clipboardContent).toBe(mockNote.noteString);
   });
+
+  test('Fix 3: Demo secure action keeps note access key stable', async ({ page }) => {
+    await initE2ePage(page, undefined, WALLET_1_PUBLIC_KEY);
+    await page.goto('/demo?e2e=1');
+
+    await unlockVault(page);
+
+    const noteBefore = await page.evaluate((wallet) => {
+      const raw = localStorage.getItem(`veillend.note:${wallet}`);
+      return raw ? JSON.parse(raw) : null;
+    }, WALLET_1_PUBLIC_KEY);
+    expect(noteBefore?.noteString).toBeTruthy();
+
+    await page.getByRole('button', { name: 'Markets' }).click();
+    await runSecureAction(page, 'Supply', '0.1');
+
+    await expect(page.getByText(/completed successfully\./)).toBeVisible({ timeout: 15000 });
+
+    const noteAfter = await page.evaluate((wallet) => {
+      const raw = localStorage.getItem(`veillend.note:${wallet}`);
+      return raw ? JSON.parse(raw) : null;
+    }, WALLET_1_PUBLIC_KEY);
+
+    expect(noteAfter?.noteHash).toBe(noteBefore?.noteHash);
+    expect(noteAfter?.noteString).toBe(noteBefore?.noteString);
+  });
 });
