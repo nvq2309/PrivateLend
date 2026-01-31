@@ -48,6 +48,24 @@ pub mod veillend {
         instructions::deposit::deposit(ctx, amount, encrypted_balance, client_pubkey)
     }
 
+    pub fn deposit_note_fast(
+        ctx: Context<DepositNoteFast>,
+        note_hash: [u8; 32],
+        note_payload: Vec<u8>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+        client_pubkey: [u8; 32],
+    ) -> Result<()> {
+        instructions::deposit_note_fast::deposit_note_fast(
+            ctx,
+            note_hash,
+            note_payload,
+            amount,
+            encrypted_balance,
+            client_pubkey,
+        )
+    }
+
     pub fn deposit_secure(
         ctx: Context<DepositSecure>,
         amount: u64,
@@ -106,6 +124,22 @@ pub mod veillend {
         instructions::withdraw::withdraw(ctx, shares_to_burn, encrypted_balance)
     }
 
+    pub fn withdraw_note_fast(
+        ctx: Context<WithdrawNoteFast>,
+        note_hash: [u8; 32],
+        note_payload: Vec<u8>,
+        shares_to_burn: u64,
+        encrypted_balance: [u8; 32],
+    ) -> Result<()> {
+        instructions::withdraw_note_fast::withdraw_note_fast(
+            ctx,
+            note_hash,
+            note_payload,
+            shares_to_burn,
+            encrypted_balance,
+        )
+    }
+
     pub fn withdraw_secure(
         ctx: Context<WithdrawSecure>,
         shares_to_burn: u64,
@@ -134,6 +168,22 @@ pub mod veillend {
         instructions::borrow::borrow(ctx, amount, encrypted_balance)
     }
 
+    pub fn borrow_note_fast(
+        ctx: Context<BorrowNoteFast>,
+        note_hash: [u8; 32],
+        note_payload: Vec<u8>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+    ) -> Result<()> {
+        instructions::borrow_note_fast::borrow_note_fast(
+            ctx,
+            note_hash,
+            note_payload,
+            amount,
+            encrypted_balance,
+        )
+    }
+
     pub fn borrow_secure<'info>(
         ctx: Context<'_, '_, '_, 'info, BorrowSecure<'info>>,
         amount: u64,
@@ -160,6 +210,22 @@ pub mod veillend {
 
     pub fn repay(ctx: Context<Repay>, amount: u64, encrypted_balance: [u8; 32]) -> Result<()> {
         instructions::repay::repay(ctx, amount, encrypted_balance)
+    }
+
+    pub fn repay_note_fast(
+        ctx: Context<RepayNoteFast>,
+        note_hash: [u8; 32],
+        note_payload: Vec<u8>,
+        amount: u64,
+        encrypted_balance: [u8; 32],
+    ) -> Result<()> {
+        instructions::repay_note_fast::repay_note_fast(
+            ctx,
+            note_hash,
+            note_payload,
+            amount,
+            encrypted_balance,
+        )
     }
 
     pub fn repay_secure<'info>(

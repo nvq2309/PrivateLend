@@ -3145,6 +3145,7 @@ dependencies = [
  "anchor-spl",
  "kamino-lend",
  "solana-poseidon",
+ "solana-program",
 ]
 
 [[package]]
