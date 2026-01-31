@@ -31,6 +31,9 @@ const RPC_URL =
   process.env.VITE_SOLANA_RPC_URL ??
   (CHAIN === 'devnet' ? 'https://api.devnet.solana.com' : 'http://127.0.0.1:8899');
 
+const DEMO_FAST_ONLY =
+  process.argv.includes('--demo-fast-only') || process.env.DEMO_FAST_ONLY === 'true';
+
 const DEFAULT_SOL_DEPOSIT = 0.01;
 const SOL_DEPOSIT_OVERRIDE = process.env.DEPOSIT_SOL_AMOUNT ?? process.env.BOOTSTRAP_SOL_AMOUNT;
 const SOL_DEPOSIT_AMOUNT = Number.parseFloat(SOL_DEPOSIT_OVERRIDE ?? String(DEFAULT_SOL_DEPOSIT));
@@ -116,6 +119,9 @@ const run = async () => {
   idl.address = programId.toBase58();
 
   console.log(`[bootstrap] chain=${CHAIN} rpc=${RPC_URL}`);
+  if (DEMO_FAST_ONLY) {
+    console.log('[bootstrap] demo-fast-only enabled');
+  }
   console.log(`[bootstrap] program=${programId.toBase58()}`);
 
   await ensureProgramDeployed(connection, programId);
