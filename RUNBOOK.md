@@ -40,6 +40,12 @@ COPYFILE_DISABLE=1 ./scripts/start-validator.sh
 COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh
 ```
 
+For demo-fast-only bootstrap (note-fast flows, no Merkle init):
+
+```bash
+COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh --demo-fast-only
+```
+
 ## ZK Artifacts
 
 If circuits are rebuilt, refresh UI artifacts:
@@ -53,6 +59,25 @@ bash ./scripts/prepare-zk-artifacts.sh
 ```bash
 npm run dev
 ```
+
+## Demo Smoke (/demo)
+
+Quick UI smoke (mocked adapters):
+
+```bash
+npm run dev -- --mode e2e --host 127.0.0.1 --port 4173
+```
+
+Open `http://localhost:4173/demo` and verify the Markets + Portfolio panes render.
+
+Localnet demo-fast-only (real chain, requires wallet):
+
+```bash
+COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh --demo-fast-only
+npm run dev
+```
+
+Open `http://localhost:5173/demo` and run a quick supply/borrow/repay/withdraw.
 
 For production-like UI tests, build first:
 

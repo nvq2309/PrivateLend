@@ -75,6 +75,25 @@ Preview:
 npm run preview
 ```
 
+## Demo Mode Smoke (/demo)
+
+Quick UI smoke (mocked adapters):
+
+```bash
+npm run dev -- --mode e2e --host 127.0.0.1 --port 4173
+```
+
+Open `http://localhost:4173/demo` and verify the Markets + Portfolio panes render.
+
+Localnet demo-fast-only (real chain, requires wallet):
+
+```bash
+COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh --demo-fast-only
+npm run dev
+```
+
+Open `http://localhost:5173/demo` and run a quick supply/borrow/repay/withdraw.
+
 ## Deployment
 
 ### Localnet (Development)
