@@ -1,4 +1,5 @@
 import { PublicKey } from '@solana/web3.js';
+import { Buffer } from 'buffer';
 import { computeCommitment, fromHex, toHex, type PrivacyNoteV2, resolveNoteAmounts } from './commitment';
 
 export const NOTE_STRING_PREFIX = 'veil-note-v1:';
@@ -55,15 +56,16 @@ export const encodeNoteString = (payload: NoteStringPayload): string => {
     buffer.set(part, offset);
     offset += part.length;
   }
-  return `${NOTE_STRING_PREFIX}${toHex(buffer)}`;
+  const encoded = Buffer.from(buffer).toString('base64');
+  return `${NOTE_STRING_PREFIX}${encoded}`;
 };
 
 export const decodeNoteString = (noteString: string): NoteStringPayload => {
   if (!noteString.startsWith(NOTE_STRING_PREFIX)) {
     throw new Error('Invalid note string format');
   }
-  const hex = noteString.slice(NOTE_STRING_PREFIX.length);
-  const bytes = fromHex(hex);
+  const encoded = noteString.slice(NOTE_STRING_PREFIX.length);
+  const bytes = Uint8Array.from(Buffer.from(encoded, 'base64'));
   if (bytes.length !== 176) {
     throw new Error('Invalid note string payload length');
   }

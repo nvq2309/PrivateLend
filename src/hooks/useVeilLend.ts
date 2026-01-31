@@ -64,6 +64,7 @@ import { fromHex, toHex } from '../sdk/commitment';
 import { getMerkleProof } from '../sdk/merkle';
 import { generateZkActionProof } from '../sdk/proof';
 import { type ZkProofResult } from '../sdk/zkProof';
+import { NOTE_STRING_PREFIX } from '../sdk/noteString';
 
 export interface Position {
   deposit: number;
@@ -110,6 +111,35 @@ const borrowLayout = borsh.struct([
 ]);
 
 const repayLayout = borsh.struct([
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const depositNoteFastLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'note_hash'),
+  borsh.vec(borsh.u8(), 'note_payload'),
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+  borsh.array(borsh.u8(), 32, 'client_pubkey'),
+]);
+
+const withdrawNoteFastLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'note_hash'),
+  borsh.vec(borsh.u8(), 'note_payload'),
+  borsh.u64('shares_to_burn'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const borrowNoteFastLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'note_hash'),
+  borsh.vec(borsh.u8(), 'note_payload'),
+  borsh.u64('amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+]);
+
+const repayNoteFastLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'note_hash'),
+  borsh.vec(borsh.u8(), 'note_payload'),
   borsh.u64('amount'),
   borsh.array(borsh.u8(), 32, 'encrypted_balance'),
 ]);
@@ -187,6 +217,26 @@ const encodeInstruction = (name: string, args?: Record<string, any>) => {
       repayLayout.encode(args, data);
       return Buffer.concat([getDiscriminator(name), data]);
     }
+    case 'deposit_note_fast': {
+      const data = Buffer.alloc(depositNoteFastLayout.span + 1024);
+      const encoded = depositNoteFastLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
+    }
+    case 'withdraw_note_fast': {
+      const data = Buffer.alloc(withdrawNoteFastLayout.span + 1024);
+      const encoded = withdrawNoteFastLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
+    }
+    case 'borrow_note_fast': {
+      const data = Buffer.alloc(borrowNoteFastLayout.span + 1024);
+      const encoded = borrowNoteFastLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
+    }
+    case 'repay_note_fast': {
+      const data = Buffer.alloc(repayNoteFastLayout.span + 1024);
+      const encoded = repayNoteFastLayout.encode(args, data);
+      return Buffer.concat([getDiscriminator(name), data.subarray(0, encoded)]);
+    }
     case 'subscribe_protection': {
       const data = Buffer.alloc(subscribeLayout.span);
       subscribeLayout.encode(args, data);
@@ -261,6 +311,19 @@ const userReceiptLayout = borsh.struct([
   borsh.array(borsh.u8(), 32, 'reserved'),
 ]);
 
+const noteReceiptLayout = borsh.struct([
+  borsh.array(borsh.u8(), 32, 'note_hash'),
+  borsh.publicKey('vault'),
+  borsh.u64('shares'),
+  borsh.u64('deposited_collateral'),
+  borsh.u64('borrowed_amount'),
+  borsh.array(borsh.u8(), 32, 'encrypted_balance'),
+  borsh.array(borsh.u8(), 32, 'client_pubkey'),
+  borsh.i64('last_update_timestamp'),
+  borsh.u8('bump'),
+  borsh.array(borsh.u8(), 32, 'reserved'),
+]);
+
 const MERKLE_TREE_SEED = 'merkle_tree';
 const MERKLE_TREE_DEPTH = 4;
 const E2E_TEST_MODE = isE2e();
@@ -298,6 +361,33 @@ const buildE2eProof = (signature: string): ZkProofResult => ({
   },
   publicSignals: [signature, 'e2e'],
 });
+
+const notePayloadFromString = (noteString: string) => {
+  if (!noteString.startsWith(NOTE_STRING_PREFIX)) {
+    throw new Error('Invalid note string format');
+  }
+  const encoded = noteString.slice(NOTE_STRING_PREFIX.length);
+  if (encoded.length === 0) {
+    throw new Error('Invalid note string payload');
+  }
+  const payload = Buffer.from(encoded, 'base64');
+  if (!payload.length) {
+    throw new Error('Invalid note string payload');
+  }
+  return new Uint8Array(payload);
+};
+
+const hashNotePayload = async (payload: Uint8Array) => {
+  if (!crypto?.subtle) {
+    throw new Error('WebCrypto is unavailable for note hashing');
+  }
+  const data = payload.buffer.slice(
+    payload.byteOffset,
+    payload.byteOffset + payload.byteLength,
+  ) as ArrayBuffer;
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return new Uint8Array(digest);
+};
 
 const deriveVaultPda = (programId: PublicKey, collateralMint: PublicKey) =>
   PublicKey.findProgramAddressSync(
@@ -587,6 +677,8 @@ export const useVeilLend = (mint?: PublicKey) => {
             liquidationThreshold: liquidationThresholdBps / 100,
           });
 
+          let nextPosition: Position | null = null;
+
           if (userReceiptAddress && publicKey) {
             const receiptInfo = await connection.getAccountInfo(userReceiptAddress);
             if (receiptInfo) {
@@ -596,8 +688,8 @@ export const useVeilLend = (mint?: PublicKey) => {
                 const borrow = toNumber(userReceipt.borrowed_amount);
                 const healthFactor =
                   borrow > 0 ? Math.floor((deposit * liquidationThresholdBps) / borrow) : 0;
-                
-                const pos = {
+
+                nextPosition = {
                   deposit,
                   borrow,
                   shares: toNumber(userReceipt.shares),
@@ -606,16 +698,41 @@ export const useVeilLend = (mint?: PublicKey) => {
                   protectionExpiry: Number(userReceipt.protection_expiry),
                   lastUpdateTimestamp: Number(userReceipt.last_update_timestamp),
                 };
-                setMyPosition(pos);
-              } else {
-                setMyPosition(null);
               }
-            } else {
-              setMyPosition(null);
             }
-          } else {
-            setMyPosition(null);
           }
+
+          if (!nextPosition && note?.noteString) {
+            try {
+              const notePayload = notePayloadFromString(note.noteString);
+              const noteHashBytes = await hashNotePayload(notePayload);
+              const noteReceiptAddress = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+              const noteReceiptInfo = await connection.getAccountInfo(noteReceiptAddress);
+              if (noteReceiptInfo) {
+                const noteReceipt = safeDecodeAccount(noteReceiptLayout, noteReceiptInfo.data);
+                if (noteReceipt) {
+                  const deposit = toNumber(noteReceipt.deposited_collateral);
+                  const borrow = toNumber(noteReceipt.borrowed_amount);
+                  const healthFactor =
+                    borrow > 0 ? Math.floor((deposit * liquidationThresholdBps) / borrow) : 0;
+
+                  nextPosition = {
+                    deposit,
+                    borrow,
+                    shares: toNumber(noteReceipt.shares),
+                    healthFactor,
+                    protectionTier: 0,
+                    protectionExpiry: 0,
+                    lastUpdateTimestamp: Number(noteReceipt.last_update_timestamp),
+                  };
+                }
+              }
+            } catch (error) {
+              console.warn('[strict][sdk] note receipt refresh failed', error);
+            }
+          }
+
+          setMyPosition(nextPosition);
           
           console.debug('[strict][sdk] refresh snapshot', {
             cluster: SOLANA_CLUSTER,
@@ -698,12 +815,17 @@ export const useVeilLend = (mint?: PublicKey) => {
   }, [
     borrowMintAddress,
     collateralMint,
+    collateralBalanceLamports,
     connection,
+    e2eWalletAddress,
+    merkleNextIndex,
+    note?.noteString,
     programId,
     publicKey,
     userReceiptAddress,
     vaultAddress,
     merkleTreeAddress,
+    walletBalanceLamports,
   ]);
 
   const initialRefreshDone = useRef(false);
@@ -794,7 +916,18 @@ export const useVeilLend = (mint?: PublicKey) => {
     [],
   );
 
-  const getNoteHashBytes = useCallback(() => {
+  const getNotePayloadBytes = useCallback(() => {
+    if (!note?.noteString) {
+      throw new Error('Note access key required');
+    }
+    return notePayloadFromString(note.noteString);
+  }, [note]);
+
+  const getNoteHashBytes = useCallback(async () => {
+    if (note?.noteString) {
+      const payload = notePayloadFromString(note.noteString);
+      return await hashNotePayload(payload);
+    }
     if (!note?.noteHash) {
       throw new Error('Note access key required');
     }
@@ -911,7 +1044,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       const receiptMint = vaultAccount.receipt_mint as PublicKey;
       const collateral = vaultAccount.collateral_mint as PublicKey;
       const collateralSymbol = resolveCollateralSymbol(collateral);
-      const noteHashBytes = getNoteHashBytes();
+      const noteHashBytes = await getNoteHashBytes();
 
       const walletAddress = publicKey.toBase58();
       const noteIndex = merkleNextIndex ?? getNextNoteIndex(walletAddress);
@@ -1508,6 +1641,457 @@ export const useVeilLend = (mint?: PublicKey) => {
     ],
   );
 
+  const depositNoteFast = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      const notePayload = getNotePayloadBytes();
+      const noteHashBytes = await hashNotePayload(notePayload);
+
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+        throw new Error('Vault state invalid');
+      }
+      const receiptMint = vaultAccount.receipt_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+      const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
+        collateral,
+        publicKey,
+      );
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const { ata: noteReceiptAta, instructions: receiptInstructions } = await buildAtaInstruction(
+        receiptMint,
+        noteReceiptPda,
+        publicKey,
+        true,
+      );
+      const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
+      const preInstructions = [...instructions, ...receiptInstructions];
+
+      if (collateral.equals(WSOL_MINT)) {
+        preInstructions.push(
+          SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: userCollateralAta,
+            lamports: amount,
+          }),
+        );
+        preInstructions.push(createSyncNativeInstruction(userCollateralAta));
+      }
+
+      const currentDeposit = myPosition?.deposit ?? 0;
+      const currentBorrow = myPosition?.borrow ?? 0;
+      const newDeposit = BigInt(currentDeposit) + BigInt(amount);
+      const newBorrow = BigInt(currentBorrow);
+
+      let encryptedBalance: number[];
+      const clientPubkey = arciumKeypair
+        ? Array.from(arciumKeypair.publicKey)
+        : Array.from(publicKey.toBytes());
+
+      if (arciumClient && arciumKeypair) {
+        const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
+        encryptedBalance = encodeEncryptedBalance(bundle);
+        storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
+      } else {
+        encryptedBalance = randomBytes32();
+      }
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: receiptMint, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptAta, isSigner: false, isWritable: true },
+          { pubkey: userCollateralAta, isSigner: false, isWritable: true },
+          { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('deposit_note_fast', {
+          note_hash: Array.from(noteHashBytes),
+          note_payload: Array.from(notePayload),
+          amount: new BN(amount),
+          encrypted_balance: encryptedBalance,
+          client_pubkey: clientPubkey,
+        }),
+      });
+
+      const signature = await sendTransaction([ix], preInstructions);
+      await refresh();
+      return { signature };
+    },
+    [
+      arciumClient,
+      arciumKeypair,
+      buildAtaInstruction,
+      connection,
+      getNotePayloadBytes,
+      myPosition,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      vaultAddress,
+      vaultCollateralAddress,
+    ],
+  );
+
+  const withdrawNoteFast = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      if (!vaultStats || vaultStats.totalShares === 0 || vaultStats.totalCollateral === 0) {
+        throw new Error('Vault has no liquidity');
+      }
+      const notePayload = getNotePayloadBytes();
+      const noteHashBytes = await hashNotePayload(notePayload);
+
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+        throw new Error('Vault state invalid');
+      }
+      const receiptMint = vaultAccount.receipt_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const shareAmount = Math.floor((amount * vaultStats.totalShares) / vaultStats.totalCollateral);
+
+      const { ata: userCollateralAta, instructions } = await buildAtaInstruction(
+        collateral,
+        publicKey,
+      );
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+      const noteReceiptAta = getAssociatedTokenAddressSync(receiptMint, noteReceiptPda, true);
+      const vaultCollateralPda = vaultCollateralAddress ?? deriveVaultCollateralPda(programId, vaultAddress);
+
+      const currentDeposit = myPosition?.deposit ?? 0;
+      const currentBorrow = myPosition?.borrow ?? 0;
+      const newDeposit = BigInt(Math.max(0, currentDeposit - amount));
+      const newBorrow = BigInt(currentBorrow);
+
+      let encryptedBalance: number[];
+      if (arciumClient) {
+        const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
+        encryptedBalance = encodeEncryptedBalance(bundle);
+        storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
+      } else {
+        encryptedBalance = randomBytes32();
+      }
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: receiptMint, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptAta, isSigner: false, isWritable: true },
+          { pubkey: userCollateralAta, isSigner: false, isWritable: true },
+          { pubkey: vaultCollateralPda, isSigner: false, isWritable: true },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('withdraw_note_fast', {
+          note_hash: Array.from(noteHashBytes),
+          note_payload: Array.from(notePayload),
+          shares_to_burn: new BN(shareAmount),
+          encrypted_balance: encryptedBalance,
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return { signature };
+    },
+    [
+      arciumClient,
+      buildAtaInstruction,
+      connection,
+      getNotePayloadBytes,
+      myPosition,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      vaultAddress,
+      vaultCollateralAddress,
+      vaultStats,
+    ],
+  );
+
+  const borrowNoteFast = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      const notePayload = getNotePayloadBytes();
+      const noteHashBytes = await hashNotePayload(notePayload);
+
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+        throw new Error('Vault state invalid');
+      }
+      const borrowMint = vaultAccount.borrow_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const { ata: userBorrowAta, instructions } = await buildAtaInstruction(
+        borrowMint,
+        publicKey,
+      );
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+
+      const kaminoBorrowConfig = {
+        programId: KAMINO_CONFIG.programId,
+        market: KAMINO_CONFIG.lendingMarket,
+        obligation: KAMINO_CONFIG.obligation,
+        lendingMarketAuthority: KAMINO_CONFIG.lendingMarketAuthority,
+        borrowReserve: KAMINO_CONFIG.borrowReserve,
+        borrowReserveLiquidityMint: KAMINO_CONFIG.borrowReserveLiquidityMint,
+        reserveSourceLiquidity: KAMINO_CONFIG.reserveSourceLiquidity,
+        borrowReserveLiquidityFeeReceiver: KAMINO_CONFIG.borrowReserveLiquidityFeeReceiver,
+        referrerTokenState: KAMINO_CONFIG.referrerTokenState,
+        pythOracle: KAMINO_CONFIG.pythOracle,
+        switchboardPriceOracle: KAMINO_CONFIG.switchboardPriceOracle,
+        switchboardTwapOracle: KAMINO_CONFIG.switchboardTwapOracle,
+        scopePrices: KAMINO_CONFIG.scopePrices,
+      };
+      const hasKaminoBorrowConfig = Object.values(kaminoBorrowConfig).every(Boolean);
+      if (kaminoBorrowConfig.programId && !hasKaminoBorrowConfig) {
+        throw new Error('Kamino borrow config missing required accounts');
+      }
+
+      const kaminoMarket = kaminoBorrowConfig.market ?? PublicKey.default;
+      const kaminoObligation = kaminoBorrowConfig.obligation ?? PublicKey.default;
+      const kaminoProgram = hasKaminoBorrowConfig
+        ? kaminoBorrowConfig.programId ?? PublicKey.default
+        : PublicKey.default;
+      const kaminoLendingMarketAuthority =
+        kaminoBorrowConfig.lendingMarketAuthority ?? PublicKey.default;
+      const kaminoBorrowReserve = kaminoBorrowConfig.borrowReserve ?? PublicKey.default;
+      const kaminoBorrowReserveLiquidityMint =
+        kaminoBorrowConfig.borrowReserveLiquidityMint ?? PublicKey.default;
+      const kaminoReserveSourceLiquidity =
+        kaminoBorrowConfig.reserveSourceLiquidity ?? PublicKey.default;
+      const kaminoBorrowReserveLiquidityFeeReceiver =
+        kaminoBorrowConfig.borrowReserveLiquidityFeeReceiver ?? PublicKey.default;
+      const kaminoReferrerTokenState = kaminoBorrowConfig.referrerTokenState ?? PublicKey.default;
+      const kaminoInstructionSysvarAccount = SYSVAR_INSTRUCTIONS_PUBKEY;
+      const kaminoPythOracle = kaminoBorrowConfig.pythOracle ?? PublicKey.default;
+      const kaminoSwitchboardPriceOracle =
+        kaminoBorrowConfig.switchboardPriceOracle ?? PublicKey.default;
+      const kaminoSwitchboardTwapOracle =
+        kaminoBorrowConfig.switchboardTwapOracle ?? PublicKey.default;
+      const kaminoScopePrices = kaminoBorrowConfig.scopePrices ?? PublicKey.default;
+
+      const currentDeposit = myPosition?.deposit ?? 0;
+      const currentBorrow = myPosition?.borrow ?? 0;
+      const newDeposit = BigInt(currentDeposit);
+      const newBorrow = BigInt(currentBorrow) + BigInt(amount);
+
+      let encryptedBalance: number[];
+      if (arciumClient) {
+        const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
+        encryptedBalance = encodeEncryptedBalance(bundle);
+        storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
+      } else {
+        encryptedBalance = randomBytes32();
+      }
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: userBorrowAta, isSigner: false, isWritable: true },
+          { pubkey: kaminoMarket, isSigner: false, isWritable: false },
+          { pubkey: kaminoObligation, isSigner: false, isWritable: false },
+          { pubkey: kaminoLendingMarketAuthority, isSigner: false, isWritable: false },
+          { pubkey: kaminoBorrowReserve, isSigner: false, isWritable: false },
+          { pubkey: kaminoBorrowReserveLiquidityMint, isSigner: false, isWritable: false },
+          { pubkey: kaminoReserveSourceLiquidity, isSigner: false, isWritable: false },
+          { pubkey: kaminoBorrowReserveLiquidityFeeReceiver, isSigner: false, isWritable: false },
+          { pubkey: kaminoReferrerTokenState, isSigner: false, isWritable: false },
+          { pubkey: kaminoInstructionSysvarAccount, isSigner: false, isWritable: false },
+          { pubkey: kaminoPythOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoSwitchboardPriceOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoSwitchboardTwapOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoScopePrices, isSigner: false, isWritable: false },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: borrowMint, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: kaminoProgram, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('borrow_note_fast', {
+          note_hash: Array.from(noteHashBytes),
+          note_payload: Array.from(notePayload),
+          amount: new BN(amount),
+          encrypted_balance: encryptedBalance,
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return { signature };
+    },
+    [
+      arciumClient,
+      buildAtaInstruction,
+      connection,
+      getNotePayloadBytes,
+      myPosition,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      vaultAddress,
+    ],
+  );
+
+  const repayNoteFast = useCallback(
+    async (amount: number) => {
+      if (!programId || !vaultAddress || !publicKey) {
+        throw new Error('Program not ready or wallet not connected');
+      }
+      const notePayload = getNotePayloadBytes();
+      const noteHashBytes = await hashNotePayload(notePayload);
+
+      const vaultInfo = await connection.getAccountInfo(vaultAddress);
+      if (!vaultInfo) {
+        throw new Error('Vault not initialized');
+      }
+      const vaultAccount = safeDecodeAccount(vaultLayout, vaultInfo.data);
+      if (!vaultAccount) {
+        throw new Error('Vault state invalid');
+      }
+      const repayMint = vaultAccount.borrow_mint as PublicKey;
+      const collateral = vaultAccount.collateral_mint as PublicKey;
+
+      const { ata: userRepayAta, instructions } = await buildAtaInstruction(
+        repayMint,
+        publicKey,
+      );
+      const noteReceiptPda = deriveNoteReceiptPda(programId, vaultAddress, noteHashBytes);
+
+      const kaminoRepayConfig = {
+        programId: KAMINO_CONFIG.programId,
+        market: KAMINO_CONFIG.lendingMarket,
+        obligation: KAMINO_CONFIG.obligation,
+        repayReserve: KAMINO_CONFIG.repayReserve,
+        reserveLiquidityMint: KAMINO_CONFIG.reserveLiquidityMint,
+        reserveDestinationLiquidity: KAMINO_CONFIG.reserveDestinationLiquidity,
+        pythOracle: KAMINO_CONFIG.pythOracle,
+        switchboardPriceOracle: KAMINO_CONFIG.switchboardPriceOracle,
+        switchboardTwapOracle: KAMINO_CONFIG.switchboardTwapOracle,
+        scopePrices: KAMINO_CONFIG.scopePrices,
+      };
+      const hasKaminoRepayConfig = Object.values(kaminoRepayConfig).every(Boolean);
+      if (kaminoRepayConfig.programId && !hasKaminoRepayConfig) {
+        throw new Error('Kamino repay config missing required accounts');
+      }
+
+      const kaminoMarket = kaminoRepayConfig.market ?? PublicKey.default;
+      const kaminoObligation = kaminoRepayConfig.obligation ?? PublicKey.default;
+      const kaminoProgram = hasKaminoRepayConfig
+        ? kaminoRepayConfig.programId ?? PublicKey.default
+        : PublicKey.default;
+      const kaminoRepayReserve = kaminoRepayConfig.repayReserve ?? PublicKey.default;
+      const kaminoReserveLiquidityMint =
+        kaminoRepayConfig.reserveLiquidityMint ?? PublicKey.default;
+      const kaminoReserveDestinationLiquidity =
+        kaminoRepayConfig.reserveDestinationLiquidity ?? PublicKey.default;
+      const kaminoInstructionSysvarAccount = SYSVAR_INSTRUCTIONS_PUBKEY;
+      const kaminoPythOracle = kaminoRepayConfig.pythOracle ?? PublicKey.default;
+      const kaminoSwitchboardPriceOracle =
+        kaminoRepayConfig.switchboardPriceOracle ?? PublicKey.default;
+      const kaminoSwitchboardTwapOracle =
+        kaminoRepayConfig.switchboardTwapOracle ?? PublicKey.default;
+      const kaminoScopePrices = kaminoRepayConfig.scopePrices ?? PublicKey.default;
+
+      const currentDeposit = myPosition?.deposit ?? 0;
+      const currentBorrow = myPosition?.borrow ?? 0;
+      const newDeposit = BigInt(currentDeposit);
+      const newBorrow = BigInt(Math.max(0, currentBorrow - amount));
+
+      let encryptedBalance: number[];
+      if (arciumClient) {
+        const bundle = arciumClient.encryptPosition(newDeposit, newBorrow);
+        encryptedBalance = encodeEncryptedBalance(bundle);
+        storeEncryptedBundle(publicKey.toBase58(), vaultAddress.toBase58(), bundle);
+      } else {
+        encryptedBalance = randomBytes32();
+      }
+
+      const ix = new TransactionInstruction({
+        programId,
+        keys: [
+          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: vaultAddress, isSigner: false, isWritable: true },
+          { pubkey: noteReceiptPda, isSigner: false, isWritable: true },
+          { pubkey: userRepayAta, isSigner: false, isWritable: true },
+          { pubkey: kaminoMarket, isSigner: false, isWritable: false },
+          { pubkey: kaminoObligation, isSigner: false, isWritable: false },
+          { pubkey: kaminoRepayReserve, isSigner: false, isWritable: false },
+          { pubkey: kaminoReserveLiquidityMint, isSigner: false, isWritable: false },
+          { pubkey: kaminoReserveDestinationLiquidity, isSigner: false, isWritable: false },
+          { pubkey: kaminoInstructionSysvarAccount, isSigner: false, isWritable: false },
+          { pubkey: kaminoPythOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoSwitchboardPriceOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoSwitchboardTwapOracle, isSigner: false, isWritable: false },
+          { pubkey: kaminoScopePrices, isSigner: false, isWritable: false },
+          { pubkey: collateral, isSigner: false, isWritable: false },
+          { pubkey: repayMint, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: kaminoProgram, isSigner: false, isWritable: false },
+        ],
+        data: encodeInstruction('repay_note_fast', {
+          note_hash: Array.from(noteHashBytes),
+          note_payload: Array.from(notePayload),
+          amount: new BN(amount),
+          encrypted_balance: encryptedBalance,
+        }),
+      });
+
+      const signature = await sendTransaction([ix], instructions);
+      await refresh();
+      return { signature };
+    },
+    [
+      arciumClient,
+      buildAtaInstruction,
+      connection,
+      getNotePayloadBytes,
+      myPosition,
+      programId,
+      publicKey,
+      refresh,
+      sendTransaction,
+      vaultAddress,
+    ],
+  );
+
   const secureDeposit = useCallback(
     async (amount: number) => {
       if (!programId || !vaultAddress || !publicKey) {
@@ -1521,7 +2105,7 @@ export const useVeilLend = (mint?: PublicKey) => {
         vault: vaultAddress.toBase58(),
         merkleTree: merkleTreeAddress.toBase58(),
       });
-      const noteHashBytes = getNoteHashBytes();
+      const noteHashBytes = await getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1729,7 +2313,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
-      const noteHashBytes = getNoteHashBytes();
+      const noteHashBytes = await getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -1917,7 +2501,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
-      const noteHashBytes = getNoteHashBytes();
+      const noteHashBytes = await getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -2096,7 +2680,7 @@ export const useVeilLend = (mint?: PublicKey) => {
       if (!merkleTreeAddress || merkleNextIndex === null) {
         throw new Error('Merkle tree not initialized');
       }
-      const noteHashBytes = getNoteHashBytes();
+      const noteHashBytes = await getNoteHashBytes();
 
       const vaultInfo = await connection.getAccountInfo(vaultAddress);
       if (!vaultInfo) {
@@ -2304,6 +2888,24 @@ export const useVeilLend = (mint?: PublicKey) => {
     [borrow, deposit, e2eFastAction, repay, withdraw],
   );
 
+  const noteFastAdapter = useMemo(
+    () =>
+      shouldMockAdapters()
+        ? createFastAdapter({
+            deposit: e2eFastAction,
+            withdraw: e2eFastAction,
+            borrow: e2eFastAction,
+            repay: e2eFastAction,
+          })
+        : createFastAdapter({
+            deposit: depositNoteFast,
+            withdraw: withdrawNoteFast,
+            borrow: borrowNoteFast,
+            repay: repayNoteFast,
+          }),
+    [borrowNoteFast, depositNoteFast, e2eFastAction, repayNoteFast, withdrawNoteFast],
+  );
+
   const secureAdapter = useMemo(
     () =>
       shouldMockAdapters()
@@ -2357,6 +2959,7 @@ export const useVeilLend = (mint?: PublicKey) => {
     clearNote,
     refreshNote,
     fastAdapter,
+    noteFastAdapter,
     secureAdapter,
     isLoading,
     refresh,
