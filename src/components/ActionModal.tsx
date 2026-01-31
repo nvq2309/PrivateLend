@@ -17,6 +17,7 @@ interface ActionModalProps {
   note?: NoteRecord | null;
   pendingNote?: NoteRecord | null;
   proof?: ZkProofResult | null;
+  demoMode?: boolean;
   onAmountChange: (value: string) => void;
   onModeChange: (mode: LendingMode) => void;
   onConfirm: () => void;
@@ -49,6 +50,7 @@ export const ActionModal: React.FC<ActionModalProps> = ({
   note,
   pendingNote,
   proof,
+  demoMode,
   onAmountChange,
   onModeChange,
   onConfirm,
@@ -203,6 +205,28 @@ export const ActionModal: React.FC<ActionModalProps> = ({
                   {proof.publicSignals.join(', ')}
                 </p>
               </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold mb-2">
+                  New note
+                </p>
+                <p className="font-mono text-cyan-300 break-all" data-snapshot="dynamic">
+                  {pendingNote.noteString ?? 'Note string unavailable'}
+                </p>
+              </div>
+              {onSaveNote && (
+                <button
+                  type="button"
+                  onClick={onSaveNote}
+                  className="w-full py-2 rounded-xl text-xs font-bold bg-emerald-500/20 text-emerald-200 border border-emerald-400/40 hover:bg-emerald-500/30 transition-all"
+                >
+                  Save to storage & clipboard
+                </button>
+              )}
+            </div>
+          )}
+
+          {demoMode && pendingNote && !proof && (
+            <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-xs space-y-3">
               <div>
                 <p className="text-[10px] uppercase tracking-widest text-slate-300 font-bold mb-2">
                   New note

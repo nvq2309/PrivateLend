@@ -4,7 +4,7 @@ import { NoteRecord } from '../sdk/notes';
 const NOTE_STORAGE_PREFIX = 'veillend.note';
 
 export const SavedNotes: React.FC = () => {
-  const [savedNotes, setSavedNotes] = useState<NoteRecord[]>([]);
+  const [savedNotes, setSavedNotes] = useState<Array<Partial<NoteRecord> & { noteString?: string }>>([]);
 
   useEffect(() => {
     if (typeof localStorage === 'undefined') return;
@@ -17,7 +17,7 @@ export const SavedNotes: React.FC = () => {
           const raw = localStorage.getItem(key);
           if (raw) {
             const parsed = JSON.parse(raw);
-            if (parsed.noteString) {
+            if (parsed && typeof parsed.noteString === 'string' && parsed.noteString.length > 0) {
               notes.push(parsed);
             }
           }
@@ -27,7 +27,7 @@ export const SavedNotes: React.FC = () => {
       }
     }
     // Sort by updated most recently
-    setSavedNotes(notes.sort((a, b) => b.updatedAt - a.updatedAt));
+    setSavedNotes(notes.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0)));
   }, []);
 
   const copyToClipboard = async (text: string) => {
@@ -45,15 +45,19 @@ export const SavedNotes: React.FC = () => {
         Saved Notes (Local Storage)
       </h3>
       <div className="space-y-3">
-        {savedNotes.map((note) => (
-          <div key={note.noteHash} className="p-4 bg-black/20 rounded-xl border border-white/5 flex justify-between items-center">
+        {savedNotes.map((note, index) => (
+          <div key={note.noteHash ?? note.noteString ?? String(index)} className="p-4 bg-black/20 rounded-xl border border-white/5 flex justify-between items-center">
             <div>
               <p className="text-xs text-slate-400 font-mono mb-1">
-                {new Date(note.updatedAt).toLocaleString()}
+                {new Date(note.updatedAt ?? 0).toLocaleString()}
               </p>
-              <p className="text-xs font-bold text-emerald-400">
-                {note.walletAddress.slice(0, 6)}...{note.walletAddress.slice(-4)}
-              </p>
+              {note.walletAddress ? (
+                <p className="text-xs font-bold text-emerald-400">
+                  {note.walletAddress.slice(0, 6)}...{note.walletAddress.slice(-4)}
+                </p>
+              ) : (
+                <p className="text-xs font-bold text-slate-400">Wallet unavailable</p>
+              )}
             </div>
             <button
               type="button"
