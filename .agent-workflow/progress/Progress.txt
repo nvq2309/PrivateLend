@@ -462,6 +462,40 @@
 - Full `npm run test:ui` not executed due to targeted failures.
 - Evidence file updated: `.agent-workflow/progress/WG-042.sisyphus.md`.
 
+## Session: Devnet deploy + bootstrap (demo-fast-only)
+**Date:** 2026-02-01
+**Agent:** Sisyphus
+
+### Goals
+- Deploy veillend program to devnet with funded deployer wallet.
+- Bootstrap demo-fast-only without airdrops.
+- Update USDC mint in `.env`.
+
+### Log
+- [x] Deploy + bootstrap: `bash ./scripts/bootstrap-devnet.sh --demo-fast-only`
+  - Outcome: pass
+  - Notes: Program Id `EESy32LNihZW9iNTaGTuzCt1meWr5pjrDzt63fJEAE8t`; airdrops skipped; vault/mints/protection initialized; deposits 0.1 SOL + 10,000 USDC; balances verified.
+- [x] Evidence: `.agent-workflow/progress/DEVNET-BOOTSTRAP.md`
+
+### Results
+- USDC mint: `GjNfu6ytFN7CSezpdQMeAEUFFUhZC9yRakM95uadKxx5`
+- Confirmation: Devnet deploy + bootstrap completed.
+
+## Session: Devnet UI core-flow smoke
+**Date:** 2026-02-01
+**Agent:** Sisyphus
+
+### Goals
+- Run minimal UI tests for supply, borrow, note export, share positions.
+
+### Log
+- [x] Tests: `npx playwright test tests/ui/app.spec.ts -g "fast supply skips proof output|fast borrow SOL skips proof output|note string export stores access record|two wallets share note and position state"`
+  - Outcome: pass (4/4)
+- [x] Evidence: `.agent-workflow/progress/DEVNET-UI-TESTS.md`
+
+### Results
+- Confirmation: Core-flow UI smoke passed.
+
 ## Session: WG-042 UI stabilization
 **Date:** 2026-01-29
 **Agent:** Sisyphus
