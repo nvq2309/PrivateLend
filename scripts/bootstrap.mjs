@@ -39,6 +39,10 @@ const SOL_DEPOSIT_OVERRIDE = process.env.DEPOSIT_SOL_AMOUNT ?? process.env.BOOTS
 const SOL_DEPOSIT_AMOUNT = Number.parseFloat(SOL_DEPOSIT_OVERRIDE ?? String(DEFAULT_SOL_DEPOSIT));
 const bootstrapUsdcEnv = process.env.BOOTSTRAP_USDC;
 const SHOULD_BOOTSTRAP_USDC = bootstrapUsdcEnv ? bootstrapUsdcEnv === 'true' : true;
+const bootstrapAirdropEnv = process.env.BOOTSTRAP_AIRDROP;
+const SHOULD_AIRDROP = bootstrapAirdropEnv
+  ? bootstrapAirdropEnv === 'true'
+  : CHAIN !== 'devnet';
 
 if (!Number.isFinite(SOL_DEPOSIT_AMOUNT) || SOL_DEPOSIT_AMOUNT <= 0) {
   throw new Error('Invalid SOL deposit amount. Set DEPOSIT_SOL_AMOUNT or BOOTSTRAP_SOL_AMOUNT.');
@@ -127,27 +131,31 @@ const run = async () => {
   await ensureProgramDeployed(connection, programId);
   const program = new anchor.Program(idl, provider);
 
-  await maybeAirdrop(connection, deployer.publicKey, 5, 'DEPLOYER');
-  await maybeAirdrop(connection, publicWalletPubkey, 2, 'PUBLIC_WALLET');
+  if (SHOULD_AIRDROP) {
+    await maybeAirdrop(connection, deployer.publicKey, 5, 'DEPLOYER');
+    await maybeAirdrop(connection, publicWalletPubkey, 2, 'PUBLIC_WALLET');
 
-  // Airdrop to E2E test wallets if configured
-  const e2eWallet1Pubkey = process.env.E2E_WALLET_1_PUBLIC_KEY;
-  const e2eWallet2Pubkey = process.env.E2E_WALLET_2_PUBLIC_KEY;
-  if (e2eWallet1Pubkey) {
-    try {
-      const wallet1 = new PublicKey(e2eWallet1Pubkey);
-      await maybeAirdrop(connection, wallet1, 10, 'E2E_WALLET_1');
-    } catch (err) {
-      console.warn('[airdrop] E2E_WALLET_1 invalid:', err);
+    // Airdrop to E2E test wallets if configured
+    const e2eWallet1Pubkey = process.env.E2E_WALLET_1_PUBLIC_KEY;
+    const e2eWallet2Pubkey = process.env.E2E_WALLET_2_PUBLIC_KEY;
+    if (e2eWallet1Pubkey) {
+      try {
+        const wallet1 = new PublicKey(e2eWallet1Pubkey);
+        await maybeAirdrop(connection, wallet1, 10, 'E2E_WALLET_1');
+      } catch (err) {
+        console.warn('[airdrop] E2E_WALLET_1 invalid:', err);
+      }
     }
-  }
-  if (e2eWallet2Pubkey) {
-    try {
-      const wallet2 = new PublicKey(e2eWallet2Pubkey);
-      await maybeAirdrop(connection, wallet2, 10, 'E2E_WALLET_2');
-    } catch (err) {
-      console.warn('[airdrop] E2E_WALLET_2 invalid:', err);
+    if (e2eWallet2Pubkey) {
+      try {
+        const wallet2 = new PublicKey(e2eWallet2Pubkey);
+        await maybeAirdrop(connection, wallet2, 10, 'E2E_WALLET_2');
+      } catch (err) {
+        console.warn('[airdrop] E2E_WALLET_2 invalid:', err);
+      }
     }
+  } else {
+    console.log('[airdrop] skipped (BOOTSTRAP_AIRDROP=false or devnet)');
   }
 
   const collateralMintAddress =
