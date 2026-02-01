@@ -298,3 +298,7 @@ bash ./scripts/prepare-zk-artifacts.sh
 - **UI tests fail with "completed successfully" not found**: Make sure you ran `npm run build` before tests. The Playwright config serves from `dist/`.
 - macOS Anchor test archive error: `rm -rf .anchor/test-ledger` then rerun with `COPYFILE_DISABLE=1`.
 - Anchor test runner excludes Playwright specs via `Anchor.toml`.
+
+## Deployments
+
+UI: https://private-lend.vercel.app/
