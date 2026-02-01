@@ -21,8 +21,13 @@ Set required values:
 - `VITE_SOLANA_CLUSTER` (localnet | devnet)
 - `VITE_PROGRAM_ID_LOCALNET`
 - `VITE_PROGRAM_ID_DEVNET`
+- `VITE_IDL_ACCOUNT_DEVNET`
+- `VITE_SOL_VAULT_DEVNET`
+- `VITE_USDC_VAULT_DEVNET`
 - `VITE_COLLATERAL_MINT`
 - `VITE_USDC_MINT`
+- `VITE_SOLANA_RPC_URL` (devnet)
+- `SOLANA_RPC_URL` (devnet)
 - `DEPLOYER_KEYPAIR`
 - `PUBLIC_WALLET_KEYPAIR`
 
@@ -40,6 +45,36 @@ COPYFILE_DISABLE=1 ./scripts/start-validator.sh
 COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh
 ```
 
+For demo-fast-only bootstrap (note-fast flows, no Merkle init):
+
+```bash
+COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh --demo-fast-only
+```
+
+## Devnet Boot
+
+1) Ensure `.env` is set to devnet (RPC + program id). Avoid airdrops on devnet:
+
+```bash
+VITE_SOLANA_CLUSTER=devnet
+BOOTSTRAP_AIRDROP=false
+```
+
+2) Deploy + bootstrap devnet:
+
+```bash
+bash ./scripts/bootstrap-devnet.sh --demo-fast-only
+```
+
+### Current Devnet Deployment (2026-02-01)
+
+- Program ID: `EESy32LNihZW9iNTaGTuzCt1meWr5pjrDzt63fJEAE8t`
+- IDL account: `Fh3iud2GQ6i8e2xRkFw8tX4TeMfpRS9L1FisiLB4CjSY`
+- SOL vault: `EAB5dXu6rqS22y6z89BZHvbmZS6HniFNwNPLaPvPQuTT`
+- USDC vault: `5pbUL4pGFbKacBa2W8quxtPgBWNrQ1Jx3gRtUnjkCVaX`
+- USDC mint: `GjNfu6ytFN7CSezpdQMeAEUFFUhZC9yRakM95uadKxx5`
+- Collateral mint (wSOL): `So11111111111111111111111111111111111111112`
+
 ## ZK Artifacts
 
 If circuits are rebuilt, refresh UI artifacts:
@@ -53,6 +88,25 @@ bash ./scripts/prepare-zk-artifacts.sh
 ```bash
 npm run dev
 ```
+
+## Demo Smoke (/demo)
+
+Quick UI smoke (mocked adapters):
+
+```bash
+npm run dev -- --mode e2e --host 127.0.0.1 --port 4173
+```
+
+Open `http://localhost:4173/demo` and verify the Markets + Portfolio panes render.
+
+Localnet demo-fast-only (real chain, requires wallet):
+
+```bash
+COPYFILE_DISABLE=1 ./scripts/bootstrap-localnet.sh --demo-fast-only
+npm run dev
+```
+
+Open `http://localhost:5173/demo` and run a quick supply/borrow/repay/withdraw.
 
 For production-like UI tests, build first:
 

@@ -115,8 +115,8 @@ const unlockVault = async (page: Page) => {
   if (gateVisible) {
     if (await page.getByRole('button', { name: 'Generate Access Key' }).isVisible()) {
       await page.getByRole('button', { name: 'Generate Access Key' }).click();
-      await expect(page.getByText('Your New Note').or(page.getByText('Generating note'))).toBeVisible();
-      await page.getByRole('button', { name: 'Confirm & Save' }).click();
+      await expect(page.getByRole('button', { name: 'Copy & Save' })).toBeVisible({ timeout: 15000 });
+      await page.getByRole('button', { name: 'Copy & Save' }).click();
     }
     await expect(page.getByText('VAULT UNLOCKED')).toBeVisible();
   }

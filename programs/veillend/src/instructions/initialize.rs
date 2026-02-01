@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::*;
+use crate::merkle::initialize_merkle_tree as init_tree;
 use crate::state::*;
 
 #[derive(Accounts)]
@@ -28,6 +29,15 @@ pub struct Initialize<'info> {
     )]
     pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
 
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + MerkleTree::INIT_SPACE,
+        seeds = [MERKLE_TREE_SEED, vault.key().as_ref()],
+        bump,
+    )]
+    pub merkle_tree: Box<Account<'info, MerkleTree>>,
+
     pub collateral_mint: Box<Account<'info, Mint>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -40,6 +50,14 @@ pub fn initialize(
     liquidation_threshold_bps: u64,
 ) -> Result<()> {
     let vault = &mut ctx.accounts.vault;
+    let merkle_tree = &mut ctx.accounts.merkle_tree;
+    msg!(
+        "[debug][sc] initialize vault={} collateral={} ltv_bps={} liquidation_threshold_bps={}",
+        vault.key(),
+        ctx.accounts.collateral_mint.key(),
+        ltv_bps,
+        liquidation_threshold_bps
+    );
     vault.authority = ctx.accounts.authority.key();
     vault.collateral_mint = ctx.accounts.collateral_mint.key();
     // Receipt/Borrow mints initialized in initialize_mints
@@ -50,6 +68,15 @@ pub fn initialize(
     vault.liquidation_threshold_bps = liquidation_threshold_bps;
     vault.is_paused = false;
     vault.bump = ctx.bumps.vault;
+
+    merkle_tree.vault = vault.key();
+    merkle_tree.bump = ctx.bumps.merkle_tree;
+    init_tree(merkle_tree)?;
+    msg!(
+        "[debug][sc] merkle initialized root={:?} next_index={}",
+        merkle_tree.root,
+        merkle_tree.next_index
+    );
 
     emit!(VaultInitializedEvent {
         vault: vault.key(),

@@ -5,7 +5,7 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
-use crate::merkle::append_leaf;
+use crate::merkle::{append_leaf, initialize_merkle_tree as init_tree};
 use crate::state::*;
 
 #[derive(Accounts)]
@@ -64,9 +64,11 @@ pub struct DepositSecure<'info> {
     pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = user,
+        space = 8 + MerkleTree::INIT_SPACE,
         seeds = [MERKLE_TREE_SEED, vault.key().as_ref()],
-        bump = merkle_tree.bump,
+        bump,
     )]
     pub merkle_tree: Box<Account<'info, MerkleTree>>,
 
@@ -91,6 +93,14 @@ pub fn deposit_secure(
 
     let vault = &mut ctx.accounts.vault;
     let note_receipt = &mut ctx.accounts.note_receipt;
+    let prev_total_collateral = vault.total_collateral;
+    let prev_total_shares = vault.total_shares;
+    msg!(
+        "[debug][sc] deposit_secure start vault={} amount={} note_hash={:?}",
+        vault.key(),
+        amount,
+        note_hash
+    );
 
     if is_zero_pubkey(&client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
@@ -99,8 +109,14 @@ pub fn deposit_secure(
         return err!(VeilLendError::ArciumClientKeyMismatch);
     }
 
+    let merkle_tree = &mut ctx.accounts.merkle_tree;
+    if merkle_tree.depth == 0 {
+        merkle_tree.vault = vault.key();
+        merkle_tree.bump = ctx.bumps.merkle_tree;
+        init_tree(merkle_tree)?;
+    }
     require!(
-        ctx.accounts.merkle_tree.vault == vault.key(),
+        merkle_tree.vault == vault.key(),
         VeilLendError::InvalidVaultState
     );
 
@@ -150,6 +166,13 @@ pub fn deposit_secure(
         .total_shares
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
+    msg!(
+        "[debug][sc] deposit_secure totals prev_collateral={} prev_shares={} new_collateral={} new_shares={}",
+        prev_total_collateral,
+        prev_total_shares,
+        vault.total_collateral,
+        vault.total_shares
+    );
 
     if note_receipt.bump == 0 {
         note_receipt.bump = ctx.bumps.note_receipt;
@@ -173,7 +196,12 @@ pub fn deposit_secure(
         note_receipt.client_pubkey = client_pubkey;
     }
 
-    let leaf_index = append_leaf(&mut ctx.accounts.merkle_tree, commitment)?;
+    let leaf_index = append_leaf(merkle_tree, commitment)?;
+    msg!(
+        "[debug][sc] deposit_secure merkle leaf_index={} root={:?}",
+        leaf_index,
+        merkle_tree.root
+    );
 
     emit!(DepositSecureEvent {
         vault: vault.key(),
@@ -182,7 +210,7 @@ pub fn deposit_secure(
         shares_minted: shares_to_mint,
         commitment,
         leaf_index,
-        merkle_root: ctx.accounts.merkle_tree.root,
+        merkle_root: merkle_tree.root,
         timestamp: Clock::get()?.unix_timestamp,
     });
 

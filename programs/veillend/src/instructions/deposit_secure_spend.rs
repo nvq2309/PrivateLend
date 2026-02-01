@@ -4,7 +4,7 @@ use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 use crate::arcium::is_zero_pubkey;
 use crate::constants::*;
 use crate::errors::VeilLendError;
-use crate::merkle::{append_leaf, spend_note};
+use crate::merkle::{append_leaf, initialize_merkle_tree as init_tree, spend_note};
 use crate::state::*;
 use crate::zk_verifier::{poseidon_nullifier_hash, verify_groth16_proof, Groth16Proof, ZkAction};
 
@@ -65,9 +65,11 @@ pub struct DepositSecureSpend<'info> {
     pub vault_collateral_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = user,
+        space = 8 + MerkleTree::INIT_SPACE,
         seeds = [MERKLE_TREE_SEED, vault.key().as_ref()],
-        bump = merkle_tree.bump,
+        bump,
     )]
     pub merkle_tree: Box<Account<'info, MerkleTree>>,
 
@@ -102,6 +104,14 @@ pub fn deposit_secure_spend(
 
     let vault = &mut ctx.accounts.vault;
     let note_receipt = &mut ctx.accounts.note_receipt;
+    let prev_total_collateral = vault.total_collateral;
+    let prev_total_shares = vault.total_shares;
+    msg!(
+        "[debug][sc] deposit_secure_spend start vault={} amount={} current_commitment={:?}",
+        vault.key(),
+        amount,
+        current_commitment
+    );
 
     if is_zero_pubkey(&note_receipt.client_pubkey) {
         return err!(VeilLendError::ArciumClientKeyMissing);
@@ -161,6 +171,13 @@ pub fn deposit_secure_spend(
         .total_shares
         .checked_add(shares_to_mint)
         .ok_or(VeilLendError::MathOverflow)?;
+    msg!(
+        "[debug][sc] deposit_secure_spend totals prev_collateral={} prev_shares={} new_collateral={} new_shares={}",
+        prev_total_collateral,
+        prev_total_shares,
+        vault.total_collateral,
+        vault.total_shares
+    );
 
     note_receipt.shares = note_receipt
         .shares
@@ -172,19 +189,30 @@ pub fn deposit_secure_spend(
         .ok_or(VeilLendError::MathOverflow)?;
     note_receipt.encrypted_balance = encrypted_balance;
 
+    let merkle_tree = &mut ctx.accounts.merkle_tree;
+    if merkle_tree.depth == 0 {
+        merkle_tree.vault = vault.key();
+        merkle_tree.bump = ctx.bumps.merkle_tree;
+        init_tree(merkle_tree)?;
+    }
     require!(
-        ctx.accounts.merkle_tree.vault == vault.key(),
+        merkle_tree.vault == vault.key(),
         VeilLendError::InvalidVaultState
     );
     spend_note(
-        &ctx.accounts.merkle_tree,
+        merkle_tree,
         &mut ctx.accounts.nullifier_account,
         vault.key(),
         current_commitment,
         &merkle_proof,
         &merkle_path,
     )?;
-    let leaf_index = append_leaf(&mut ctx.accounts.merkle_tree, new_commitment)?;
+    let leaf_index = append_leaf(merkle_tree, new_commitment)?;
+    msg!(
+        "[debug][sc] deposit_secure_spend merkle leaf_index={} root={:?}",
+        leaf_index,
+        merkle_tree.root
+    );
 
     emit!(DepositSecureSpendEvent {
         vault: vault.key(),
@@ -195,7 +223,7 @@ pub fn deposit_secure_spend(
         new_commitment,
         nullifier,
         leaf_index,
-        merkle_root: ctx.accounts.merkle_tree.root,
+        merkle_root: merkle_tree.root,
         timestamp: Clock::get()?.unix_timestamp,
     });
 

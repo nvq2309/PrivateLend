@@ -13,6 +13,17 @@ export DEPOSIT_SOL_AMOUNT="${DEPOSIT_SOL_AMOUNT:-0.1}"
 export BOOTSTRAP_USDC="${BOOTSTRAP_USDC:-true}"
 export COPYFILE_DISABLE="${COPYFILE_DISABLE:-1}"
 
+DEMO_FAST_ONLY=false
+for arg in "$@"; do
+  if [ "$arg" = "--demo-fast-only" ]; then
+    DEMO_FAST_ONLY=true
+  fi
+done
+
+if [ "$DEMO_FAST_ONLY" = "true" ]; then
+  export DEMO_FAST_ONLY=true
+fi
+
 if [ -n "${DEPLOYER_KEYPAIR:-}" ] && [ -z "${ANCHOR_WALLET:-}" ]; then
   export ANCHOR_WALLET="$DEPLOYER_KEYPAIR"
 fi
@@ -27,7 +38,15 @@ if [ -f "target/idl/veillend.json" ]; then
 fi
 
 echo "[bootstrap] deploying program..."
-anchor deploy --provider.cluster devnet
+if [ -n "${DEPLOYER_KEYPAIR:-}" ]; then
+  anchor deploy --provider.cluster devnet --provider.wallet "$DEPLOYER_KEYPAIR"
+else
+  anchor deploy --provider.cluster devnet
+fi
 
 echo "[bootstrap] running bootstrap..."
-node scripts/bootstrap.mjs
+if [ "$DEMO_FAST_ONLY" = "true" ]; then
+  node scripts/bootstrap.mjs --demo-fast-only
+else
+  node scripts/bootstrap.mjs
+fi

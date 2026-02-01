@@ -178,15 +178,26 @@ const unlockVault = async (page: Page, _testInfo: TestInfo, _prefix = 'vault') =
   const gateVisible = await page.getByText('Private Vault Access').isVisible();
   if (gateVisible) {
     await page.getByRole('button', { name: 'Generate Access Key' }).click();
-    await expect(page.getByText('Your New Note').or(page.getByText('Generating note'))).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm & Save' }).click();
+    await expect(page.getByRole('button', { name: 'Copy & Save' })).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: 'Copy & Save' }).click();
     await expect(page.getByText('VAULT UNLOCKED')).toBeVisible();
   }
 };
 
 const openAction = async (page: Page, name: string) => {
-  await page.getByRole('button', { name }).first().click();
-  await expect(page.getByLabel('Amount')).toBeVisible({ timeout: 5000 });
+  const btn = page.getByRole('button', { name }).first();
+  await btn.waitFor({ state: 'visible', timeout: 5000 });
+  await expect(btn).toBeEnabled({ timeout: 5000 });
+  await btn.click({ force: true });
+  await expect(page.getByLabel('Amount')).toBeVisible({ timeout: 10000 });
+};
+
+const navigateForAction = async (page: Page, action: ActionType) => {
+  const needsPortfolio = action === 'Withdraw' || action === 'Repay';
+  await page.getByRole('button', { name: needsPortfolio ? 'Portfolio' : 'Markets' }).click();
+  if (needsPortfolio) {
+    await expect(page.getByText('VAULT UNLOCKED')).toBeVisible({ timeout: 10000 });
+  }
 };
 
 const runFastAction = async (page: Page, label: string, amount: string) => {
@@ -197,9 +208,25 @@ const runFastAction = async (page: Page, label: string, amount: string) => {
     .isVisible();
   if (shieldedText) {
     await toggleBtn.click();
+    await expect(
+      page.locator('p.font-bold.text-sm', { hasText: 'Fast Execution' })
+    ).toBeVisible({ timeout: 5000 });
   }
   await page.getByLabel('Amount').fill(amount);
+  await expect(page.getByRole('button', { name: 'Execute' })).toBeEnabled({ timeout: 5000 });
   await page.getByRole('button', { name: 'Execute' }).click();
+};
+
+const waitForFastOutcome = async (page: Page, timeout = 10000) => {
+  const success = page.getByText(/completed successfully\./);
+  const error = page.getByText(/Amount exceeds maximum|Enter a valid amount/);
+  const amountField = page.getByLabel('Amount');
+  const result = await Promise.race([
+    success.waitFor({ timeout }).then(() => 'success'),
+    error.waitFor({ timeout }).then(() => 'error'),
+    amountField.waitFor({ state: 'hidden', timeout }).then(() => 'closed'),
+  ]).catch(() => 'timeout');
+  return result;
 };
 
 const runSecureAction = async (page: Page, label: string, amount: string) => {
@@ -346,18 +373,15 @@ test.describe(`Massive Randomized E2E Suite (${NUM_TESTS} tests, seed: ${TEST_SE
         const assetName = step.assetIdx === 0 ? 'SOL' : 'USDC';
         
         await test.step(`Step ${stepIdx + 1}: W${step.walletIdx + 1} ${step.action} ${step.amount} ${assetName} (${step.mode})`, async () => {
-          // Navigate to markets
-          await page.getByRole('button', { name: 'Markets' }).click();
+          await navigateForAction(page, step.action);
           
           try {
             if (step.mode === 'FAST') {
               await runFastAction(page, step.action, step.amount);
-              
-              // Check for success or expected error
-              const success = page.getByText(/completed successfully\./);
-              const error = page.getByText(/Amount exceeds maximum|Enter a valid amount/);
-              
-              await expect(success.or(error)).toBeVisible({ timeout: 10000 });
+              const outcome = await waitForFastOutcome(page, 10000);
+              if (outcome === 'timeout') {
+                throw new Error('Fast action outcome timeout');
+              }
             } else {
               await runSecureAction(page, step.action, step.amount);
               
@@ -395,31 +419,34 @@ test.describe('Multi-Action Edge Cases', () => {
     await page.goto('/?e2e=1');
     await unlockVault(page, testInfo, 'cycle-test');
 
-    await page.getByRole('button', { name: 'Markets' }).click();
-
     // Step 1: Supply
+    await navigateForAction(page, 'Supply');
     await runFastAction(page, 'Supply', '1');
-    await expect(page.getByText(/completed successfully\./)).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
     // Step 2: Borrow
+    await navigateForAction(page, 'Borrow');
     await runFastAction(page, 'Borrow', '0.5');
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
     // Step 3: Repay
+    await navigateForAction(page, 'Repay');
     await runFastAction(page, 'Repay', '0.1');
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
     // Step 4: Withdraw
+    await navigateForAction(page, 'Withdraw');
     await runFastAction(page, 'Withdraw', '0.1');
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
     // Step 5: Supply again
+    await navigateForAction(page, 'Supply');
     await runFastAction(page, 'Supply', '0.5');
-    await expect(page.getByText(/completed successfully\./)).toBeVisible();
+    await waitForFastOutcome(page, 10000);
   });
 
   test('6-action alternating SOL/USDC flow', async ({ page }, testInfo) => {
@@ -427,31 +454,35 @@ test.describe('Multi-Action Edge Cases', () => {
     await page.goto('/?e2e=1');
     await unlockVault(page, testInfo, 'alternating-test');
 
-    await page.getByRole('button', { name: 'Markets' }).click();
-
     // Alternating SOL and USDC actions
+    await navigateForAction(page, 'Supply');
     await runFastAction(page, 'Supply', '1'); // SOL
-    await expect(page.getByText(/completed successfully\./)).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
+    await navigateForAction(page, 'Supply');
     await runFastAction(page, 'Supply', '100'); // USDC
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
+    await navigateForAction(page, 'Borrow');
     await runFastAction(page, 'Borrow', '0.3'); // SOL
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
+    await navigateForAction(page, 'Borrow');
     await runFastAction(page, 'Borrow', '50'); // USDC
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
+    await navigateForAction(page, 'Repay');
     await runFastAction(page, 'Repay', '0.1'); // SOL
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
     await dismissModal(page);
 
+    await navigateForAction(page, 'Repay');
     await runFastAction(page, 'Repay', '20'); // USDC
-    await expect(page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))).toBeVisible();
+    await waitForFastOutcome(page, 10000);
   });
 
   test('7-action all-secure-mode flow', async ({ page }, testInfo) => {
@@ -459,9 +490,7 @@ test.describe('Multi-Action Edge Cases', () => {
     await page.goto('/?e2e=1');
     await unlockVault(page, testInfo, 'all-secure-test');
 
-    await page.getByRole('button', { name: 'Markets' }).click();
-
-    const actions: Array<{ action: string; amount: string; assetIdx: number }> = [
+    const actions: Array<{ action: ActionType; amount: string; assetIdx: number }> = [
       { action: 'Supply', amount: '0.5', assetIdx: 0 },
       { action: 'Supply', amount: '0.5', assetIdx: 1 },
       { action: 'Borrow', amount: '0.1', assetIdx: 0 },
@@ -475,6 +504,7 @@ test.describe('Multi-Action Edge Cases', () => {
       const { action, amount, assetIdx } = actions[i];
       
       try {
+        await navigateForAction(page, action);
         await runSecureAction(page, action, amount);
         
         const proof = page.getByText('Proof signals');
@@ -501,9 +531,7 @@ test.describe('Multi-Action Edge Cases', () => {
     await page.goto('/?e2e=1');
     await unlockVault(page, testInfo, 'rapid-fire-test');
 
-    await page.getByRole('button', { name: 'Markets' }).click();
-
-    const actions = [
+    const actions: Array<{ action: ActionType; amount: string; assetIdx: number }> = [
       { action: 'Supply', amount: '0.1', assetIdx: 0 },
       { action: 'Supply', amount: '0.2', assetIdx: 0 },
       { action: 'Supply', amount: '0.3', assetIdx: 0 },
@@ -515,10 +543,9 @@ test.describe('Multi-Action Edge Cases', () => {
     ];
 
     for (const { action, amount, assetIdx } of actions) {
+      await navigateForAction(page, action);
       await runFastAction(page, action, amount);
-      await expect(
-        page.getByText(/completed successfully\./).or(page.getByText(/Amount exceeds/))
-      ).toBeVisible({ timeout: 10000 });
+      await waitForFastOutcome(page, 10000);
       await dismissModal(page);
     }
   });

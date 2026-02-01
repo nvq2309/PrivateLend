@@ -3,7 +3,6 @@ export type NoteRecord = {
   walletAddress: string;
   noteHash: string;
   noteString?: string;
-  lastTxnId: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -66,7 +65,6 @@ export const createNoteRecord = async (params: {
     walletAddress: params.walletAddress,
     noteHash,
     noteString: params.noteString,
-    lastTxnId,
     createdAt: params.previous?.createdAt ?? timestamp,
     updatedAt: timestamp,
   };

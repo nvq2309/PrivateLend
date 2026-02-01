@@ -119,7 +119,6 @@ describe('Privacy Phase - SDK', () => {
       const expectedSeed = `${rotated.updatedAt}:${walletAddress}:tx-123`;
       const expectedHash = await deriveNoteHash(expectedSeed);
       expect(rotated.walletAddress).to.equal(walletAddress);
-      expect(rotated.lastTxnId).to.equal('tx-123');
       expect(rotated.noteHash).to.equal(expectedHash);
       expect(rotated.createdAt).to.equal(initial.createdAt);
       expect(rotated.updatedAt).to.be.at.least(initial.updatedAt);

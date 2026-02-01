@@ -168,15 +168,19 @@ const initE2ePage = async (
     borrowBalanceLamports?: number;
     usdcBalanceLamports?: number;
   },
+  useRealMax?: boolean,
 ) => {
   bindE2eNavigation(page);
-  await page.addInitScript(({ secret, publicKey, e2eBalances }) => {
+  await page.addInitScript(({ secret, publicKey, e2eBalances, realMax }) => {
     localStorage.clear();
     localStorage.setItem('walletName', 'TestWallet');
     (window as any).__VEILLEND_TEST_CLIPBOARD__ = '';
     if (secret) (window as any).__VEILLEND_E2E_WALLET_SECRET__ = secret;
     (window as any).__VEILLEND_E2E_WALLET_PUBLIC_KEY__ = publicKey ?? null;
     if (e2eBalances) (window as any).__VEILLEND_E2E_BALANCES__ = e2eBalances;
+    if (realMax) {
+      (window as any).__VEILLEND_E2E_USE_REAL_MAX__ = true;
+    }
     Object.defineProperty(navigator, 'clipboard', {
       value: {
         writeText: (text: string) => {
@@ -190,6 +194,7 @@ const initE2ePage = async (
     secret: walletSecret ?? null,
     publicKey: walletPublicKey ?? null,
     e2eBalances: balances ?? null,
+    realMax: useRealMax ?? false,
   });
 };
 
@@ -202,8 +207,8 @@ const unlockVault = async (page: Page, testInfo: TestInfo, prefix = 'vault') => 
   const gateVisible = await vaultGate.isVisible();
   if (gateVisible) {
     await page.getByRole('button', { name: 'Generate Access Key' }).click();
-    await expect(page.getByText('Your New Note').or(page.getByText('Generating note'))).toBeVisible();
-    await page.getByRole('button', { name: 'Confirm & Save' }).click();
+    await expect(page.getByRole('button', { name: 'Copy & Save' })).toBeVisible({ timeout: 15000 });
+    await page.getByRole('button', { name: 'Copy & Save' }).click();
     await expect(vaultUnlocked).toBeVisible();
   }
   await expect(vaultUnlocked).toBeVisible();
@@ -410,7 +415,8 @@ test.describe('Security Edge Cases', () => {
 
   for (const edgeCase of edgeCases) {
     test(edgeCase.name, async ({ page }, testInfo) => {
-      await initE2ePage(page);
+      const useRealMax = ['Borrow', 'Withdraw', 'Repay'].includes(edgeCase.action);
+      await initE2ePage(page, undefined, undefined, undefined, useRealMax);
       await page.goto('/?e2e=1');
       await waitForTestWallet(page);
       await unlockVault(page, testInfo, `edge-${edgeCase.name.replace(/\s+/g, '-')}`);
