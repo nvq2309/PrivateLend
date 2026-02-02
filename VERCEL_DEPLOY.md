@@ -7,9 +7,11 @@
    - Go to [vercel.com](https://vercel.com)
    - Import your GitHub repository
    - Framework preset: Vite
-3. **Configure Environment Variables** in Vercel Dashboard:
+3. **Environment Variables** are automatically loaded from `.env.production`
 
-### Required Environment Variables
+### Default Environment Variables (in `.env.production`)
+
+The following devnet configuration is committed to the repository and automatically used during production builds:
 
 ```
 VITE_SOLANA_CLUSTER=devnet
@@ -20,6 +22,14 @@ VITE_USDC_VAULT_DEVNET=5pbUL4pGFbKacBa2W8quxtPgBWNrQ1Jx3gRtUnjkCVaX
 VITE_USDC_MINT=GjNfu6ytFN7CSezpdQMeAEUFFUhZC9yRakM95uadKxx5
 VITE_COLLATERAL_MINT=So11111111111111111111111111111111111111112
 VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
+```
+
+### Optional: Override in Vercel Dashboard
+
+To use a different RPC endpoint (e.g., Helius for better rate limits), add these in Vercel Dashboard → Settings → Environment Variables:
+
+```
+VITE_SOLANA_RPC_URL=https://devnet.helius-rpc.com/?api-key=YOUR_API_KEY
 ```
 
 ### Build Settings (Auto-detected)
